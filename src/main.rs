@@ -1,4 +1,6 @@
 use clap::{Parser, Subcommand};
+use std::fs::create_dir_all;
+use std::{fs::exists, io::Result};
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -32,11 +34,13 @@ enum Commands {
 }
 
 fn main() {
+    let git_dir = ".ugit";
     let args = Args::parse();
 
     match args.command {
         Commands::Init => {
-            println!("Initializing repository...");
+            init_repository(git_dir)
+                .expect("Error occured when attempting to initialize repository");
         }
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
@@ -47,5 +51,15 @@ fn main() {
         Commands::Diff { file_a, file_b } => {
             println!("Diffing two files: {} | {}", file_a, file_b);
         }
+    }
+}
+
+fn init_repository(dir: &str) -> Result<()> {
+    if exists(dir).is_ok() {
+        println!("Repository already initialized");
+        Ok(())
+    } else {
+        println!("Initializing repository {}...", dir);
+        create_dir_all(format!("{}/objects", dir))
     }
 }
