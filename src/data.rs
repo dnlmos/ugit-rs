@@ -1,6 +1,6 @@
-use std::fs::{read_to_string, write};
+use std::fs;
 use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io::Result;
+use std::io;
 
 use crate::cli::GIT_DIR;
 
@@ -13,30 +13,30 @@ use crate::cli::GIT_DIR;
 /// # Returns
 ///
 /// Returns a `Result` indicating success or error.
-pub fn hash_object(file_path: &str) -> Result<()> {
-    let content = read_to_string(file_path)?;
+pub fn hash_object(file_path: &str) -> io::Result<()> {
+    let content = fs::read_to_string(file_path)?;
 
     let mut hasher = DefaultHasher::new();
     content.hash(&mut hasher);
     let oid = hasher.finish();
 
-    write(format!("{GIT_DIR}/objects/{oid}"), content)
+    fs::write(format!("{GIT_DIR}/objects/{oid}"), content)
+}
+
+pub fn get_object(oid: &str) -> io::Result<String> {
+    fs::read_to_string(format!("{}/objects/{}", GIT_DIR, oid))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::{
-        fs::{File, create_dir_all, remove_dir_all, remove_file},
-        io::Write,
-        path::Path,
-    };
+    use std::{fs::File, io::Write, path::Path};
 
     #[test]
-    fn test_hash_object() -> Result<()> {
+    fn test_hash_object() -> io::Result<()> {
         // Setup: Create a temporary directory
         let test_dir = format!("{}/objects", GIT_DIR);
-        create_dir_all(&test_dir)?;
+        fs::create_dir_all(&test_dir)?;
 
         // Create a temporary file
         let file_path = "test_file.txt";
@@ -60,8 +60,8 @@ mod tests {
         assert!(Path::new(&object_path).exists());
 
         // cleanup
-        remove_file(file_path)?;
-        remove_dir_all(test_dir)?;
+        fs::remove_file(file_path)?;
+        fs::remove_dir_all(test_dir)?;
 
         Ok(())
     }

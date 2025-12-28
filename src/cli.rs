@@ -1,7 +1,7 @@
 use clap::{Parser, Subcommand};
 // use ugit_rs::data::hash_object;
-use std::fs::create_dir_all;
-use std::{fs::exists, io::Result};
+use std::fs::{self};
+use std::io::{self};
 
 pub const GIT_DIR: &str = ".ugit";
 
@@ -36,12 +36,12 @@ pub enum Commands {
     },
 }
 
-pub fn init_repository(dir: &str) -> Result<()> {
-    if exists(dir).is_ok() {
+pub fn init_repository(dir: &str) -> io::Result<()> {
+    if fs::exists(dir).is_ok() {
         println!("Repository already initialized");
         Ok(())
     } else {
         println!("Initializing repository {}...", dir);
-        create_dir_all(format!("{}/objects", dir))
+        fs::create_dir_all(format!("{}/objects", dir))
     }
 }
