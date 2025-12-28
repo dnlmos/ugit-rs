@@ -27,7 +27,7 @@ pub fn hash_object(file_path: &str) -> Result<()> {
 mod tests {
     use super::*;
     use std::{
-        fs::{self, File},
+        fs::{File, create_dir_all, remove_dir_all, remove_file},
         io::Write,
         path::Path,
     };
@@ -36,7 +36,7 @@ mod tests {
     fn test_hash_object() -> Result<()> {
         // Setup: Create a temporary directory
         let test_dir = format!("{}/objects", GIT_DIR);
-        fs::create_dir_all(&test_dir)?;
+        create_dir_all(&test_dir)?;
 
         // Create a temporary file
         let file_path = "test_file.txt";
@@ -60,8 +60,8 @@ mod tests {
         assert!(Path::new(&object_path).exists());
 
         // cleanup
-        fs::remove_file(file_path)?;
-        fs::remove_dir_all(test_dir)?;
+        remove_file(file_path)?;
+        remove_dir_all(test_dir)?;
 
         Ok(())
     }
