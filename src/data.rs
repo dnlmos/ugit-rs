@@ -28,7 +28,7 @@ pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
     oid
 }
 
-pub fn get_object(oid: String, expected: ObjectType) -> String {
+pub fn get_object(oid: String, expected: ObjectType) -> Vec<u8> {
     let path = format!("{}/objects/{}", GIT_DIR, oid);
     let obj = fs::read(&path).expect("failed to read object");
 
@@ -47,9 +47,7 @@ pub fn get_object(oid: String, expected: ObjectType) -> String {
         type_
     );
 
-    str::from_utf8(&obj[null_pos + 1..])
-        .expect("error decoding contetnt")
-        .to_string()
+    obj[null_pos + 1..].to_owned()
 }
 
 pub enum ObjectType {
@@ -96,7 +94,7 @@ mod tests {
 
         // check if object is correct
         let retrieved = get_object(oid, ObjectType::Blob);
-        assert_eq!(retrieved, content);
+        assert_eq!(retrieved, content.as_bytes());
 
         // cleanup
         fs::remove_file(object_path)?;
