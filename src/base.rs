@@ -2,20 +2,22 @@ use std::collections::{HashMap, HashSet};
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 
+use ugit_rs::cli::{BASE_DIR, GIT_DIR};
+
 use crate::data::{ObjectType, get_object, hash_object};
 
 fn get_ignored_files() -> HashSet<PathBuf> {
     let mut ignored_files = HashSet::new();
 
-    let ugit_ignore = fs::read_to_string(".ugitignore").expect("Failed to read .ugitignore");
-
-    ugit_ignore
-        .lines()
-        .filter(|line| !line.is_empty())
-        .for_each(|entry| {
-            ignored_files.insert(Path::new(".").join(Path::new(entry)));
-        });
-
+    if let Ok(content) = fs::read_to_string(BASE_DIR.to_string() + "/.ugitignore") {
+        content
+            .lines()
+            .filter(|line| !line.is_empty())
+            .for_each(|entry| {
+                ignored_files.insert(Path::new(BASE_DIR).join(Path::new(entry)));
+            });
+    }
+    println!("[ignored files] {:?}", ignored_files);
     ignored_files
 }
 
@@ -32,6 +34,7 @@ pub fn write_tree(dir: &Path) -> String {
                 continue;
             }
 
+            // TODO error handling
             let file_name = path.file_name().unwrap().to_str().unwrap().to_string();
 
             if path.is_file() {
@@ -45,6 +48,9 @@ pub fn write_tree(dir: &Path) -> String {
                 entries.push((ObjectType::Tree, oid, file_name));
             }
         }
+    } else {
+        // TODO error handling
+        println!("err reading {}", dir.to_str().unwrap());
     }
 
     entries.sort_by(|a, b| a.2.cmp(&b.2));
@@ -85,37 +91,47 @@ fn iter_tree_entries(oid: &str) -> Vec<(ObjectType, String, String)> {
     entries
 }
 
-fn get_tree(oid: &str, base_path: &Path) -> HashMap<PathBuf, String> {
+fn get_tree(oid: &str, base_path: &Path) -> HashMap<PathBuf, (ObjectType, String)> {
     let mut result = HashMap::new();
 
-    for (type_, entry_oid, name) in iter_tree_entries(oid) {
-        assert!(!name.contains('/'));
-        assert!(name != "." && name != "..");
-
+    for (obj_type, entry_oid, name) in iter_tree_entries(oid) {
         let path = base_path.join(&name);
 
-        match type_.as_str() {
-            "blob" => {
-                result.insert(path, entry_oid);
-            }
-            "tree" => {
-                let subtree = get_tree(&entry_oid, &path);
-                result.extend(subtree);
-            }
-            _ => panic!("Unknown tree entry type: {}", type_),
+        let is_tree = matches!(obj_type, ObjectType::Tree);
+
+        result.insert(path.clone(), (obj_type, entry_oid.clone()));
+
+        if is_tree {
+            let subtree = get_tree(&entry_oid, &path);
+            result.extend(subtree);
         }
     }
     result
 }
 
 pub fn read_tree(oid: &str) {
-    println!("{:?}", get_tree(oid, Path::new("./")));
-    for (entry, oid) in get_tree(oid, Path::new("./")).iter() {
-        if entry.is_file() {
-            let _ = fs::create_dir_all(entry.parent().unwrap());
-            fs::write(entry, get_object(oid, ObjectType::Blob)).unwrap();
-        } else {
-            let _ = fs::create_dir_all(entry);
+    let tree_map = get_tree(oid, Path::new(BASE_DIR));
+
+    for (path, (obj_type, entry_oid)) in tree_map {
+        match obj_type {
+            ObjectType::Blob => {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).ok();
+                }
+
+                println!(
+                    "[creating file] {} | oid {}",
+                    path.to_str().unwrap(),
+                    entry_oid
+                );
+                let data = get_object(&entry_oid, ObjectType::Blob);
+
+                fs::write(path, data).expect("Failed to write blob");
+            }
+            ObjectType::Tree => {
+                println!("[creating dir] {}", path.to_str().unwrap());
+                fs::create_dir_all(path).expect("Failed to create directory");
+            }
         }
     }
 }

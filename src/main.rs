@@ -6,6 +6,7 @@ use std::path::Path;
 
 use clap::Parser;
 use cli::{Args, Commands, init_repository};
+use ugit_rs::cli::BASE_DIR;
 
 fn main() {
     let args = Args::parse();
@@ -25,7 +26,7 @@ fn main() {
         }
         Commands::WriteTree => {
             println!("Writing tree");
-            base::write_tree(Path::new("."));
+            base::write_tree(Path::new(BASE_DIR));
         }
         Commands::ReadTree => {
             println!("Reading tree");

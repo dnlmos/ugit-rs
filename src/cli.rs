@@ -2,6 +2,7 @@ use clap::{Parser, Subcommand};
 use std::fs::{self};
 use std::io::{self};
 
+pub const BASE_DIR: &str = "./test_dir";
 pub const GIT_DIR: &str = "./test_dir/.ugit";
 
 #[derive(Parser)]
