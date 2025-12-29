@@ -1,5 +1,5 @@
+use sha1::{Digest, Sha1};
 use std::fs;
-use std::hash::{DefaultHasher, Hasher};
 
 use crate::cli::GIT_DIR;
 
@@ -12,22 +12,25 @@ use crate::cli::GIT_DIR;
 /// # Returns
 ///
 /// Returns a `Result` indicating success or error.
-pub fn hash_object(file_path: &str, type_: ObjectType) -> u64 {
-    let content = fs::read_to_string(file_path).expect("failed to read the file");
-    let obj = [type_.as_bytes(), b"\x00", content.as_bytes()].concat();
+pub fn hash_object(file_path: &str, type_: ObjectType) -> String {
+    let content = fs::read(file_path).expect("failed to read file");
 
-    let mut hasher = DefaultHasher::new();
-    hasher.write(&obj);
-    let oid = hasher.finish();
-    println!("{oid}");
+    let header = format!("{}\0", type_.as_str());
+    let obj = [header.as_bytes(), &content].concat();
+
+    let mut hasher = Sha1::new();
+    hasher.update(&obj);
+    let result = hasher.finalize();
+
+    let oid = hex::encode(result);
 
     let path = format!("{}/objects/{}", GIT_DIR, oid);
-    fs::write(&path, obj).expect("failed to write object");
+    fs::write(path, obj).unwrap();
 
     oid
 }
 
-pub fn get_object(oid: &u64, expected: ObjectType) -> String {
+pub fn get_object(oid: String, expected: ObjectType) -> String {
     let path = format!("{}/objects/{}", GIT_DIR, oid);
     let obj = fs::read(&path).expect("failed to read object");
 
@@ -71,15 +74,18 @@ impl ObjectType {
 
 #[cfg(test)]
 mod tests {
+    use crate::cli::init_repository;
+
     use super::*;
     use std::io;
-    use std::{fs::File, io::Write, path::Path};
+    use std::path::Path;
+    use std::{fs::File, io::Write};
 
     #[test]
     fn test_hash_object() -> io::Result<()> {
-        // create a temp directory
-        let test_dir = format!("{}/objects", GIT_DIR);
-        fs::create_dir_all(&test_dir)?;
+        if !Path::new(format!("{}/objects", GIT_DIR).as_str()).exists() {
+            init_repository(GIT_DIR)?;
+        }
 
         // create temp file and write to it
         let file_path = "test_file.txt";
@@ -91,17 +97,15 @@ mod tests {
 
         // check if the object file was created
         let object_path = format!("{}/objects/{}", GIT_DIR, oid);
-        println!("{}", object_path);
         assert!(Path::new(&object_path).exists());
 
         // check if object is correct
-        let retrieved = get_object(&oid, ObjectType::Blob);
+        let retrieved = get_object(oid, ObjectType::Blob);
         assert_eq!(retrieved, content);
 
         // cleanup
         fs::remove_file(file_path)?;
         fs::remove_file(object_path)?;
-        fs::remove_dir_all(test_dir)?;
 
         Ok(())
     }
