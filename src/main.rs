@@ -1,3 +1,4 @@
+mod base;
 mod cli;
 mod data;
 
@@ -20,6 +21,10 @@ fn main() {
         }
         Commands::Diff { file_a, file_b } => {
             println!("Diffing two files: {} | {}", file_a, file_b);
+        }
+        Commands::WriteTree => {
+            println!("writing tree");
+            let _ = base::write_tree(".");
         }
     }
 }
