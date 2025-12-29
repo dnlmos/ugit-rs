@@ -5,15 +5,14 @@ mod data;
 use std::path::Path;
 
 use clap::Parser;
-use cli::{Args, Commands, GIT_DIR, init_repository};
+use cli::{Args, Commands, init_repository};
 
 fn main() {
     let args = Args::parse();
 
     match args.command {
         Commands::Init => {
-            init_repository(GIT_DIR)
-                .expect("Error occured when attempting to initialize repository");
+            init_repository().expect("Error occured when attempting to initialize repository");
         }
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
@@ -25,8 +24,12 @@ fn main() {
             println!("Diffing two files: {} | {}", file_a, file_b);
         }
         Commands::WriteTree => {
-            println!("writing tree");
+            println!("Writing tree");
             base::write_tree(Path::new("."));
+        }
+        Commands::ReadTree => {
+            println!("Reading tree");
+            base::read_tree("9ae035d0aef480ee04f5f7dc72ddb23e96749e63");
         }
     }
 }

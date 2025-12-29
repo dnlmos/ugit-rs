@@ -94,7 +94,7 @@ mod tests {
     #[test]
     fn test_hash_object() -> io::Result<()> {
         if !Path::new(format!("{}/objects", GIT_DIR).as_str()).exists() {
-            init_repository(GIT_DIR)?;
+            init_repository()?;
         }
         let content = "Hello world!";
 

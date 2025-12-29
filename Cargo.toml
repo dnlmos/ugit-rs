@@ -7,4 +7,3 @@ edition = "2024"
 clap = { version = "4.5.53", features = ["derive"] }
 hex = "0.4.3"
 sha1 = "0.10.6"
-walkdir = "2.5.0"
