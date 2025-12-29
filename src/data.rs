@@ -1,5 +1,5 @@
 use sha1::{Digest, Sha1};
-use std::fs;
+use std::{fmt, fs};
 
 use crate::cli::GIT_DIR;
 
@@ -28,7 +28,7 @@ pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
     oid
 }
 
-pub fn get_object(oid: String, expected: ObjectType) -> Vec<u8> {
+pub fn get_object(oid: &str, expected: ObjectType) -> Vec<u8> {
     let path = format!("{}/objects/{}", GIT_DIR, oid);
     let obj = fs::read(&path).expect("failed to read object");
 
@@ -71,6 +71,18 @@ impl ObjectType {
     }
 }
 
+impl fmt::Display for ObjectType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
+impl fmt::Debug for ObjectType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}", self.as_str())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use crate::cli::init_repository;
@@ -93,7 +105,7 @@ mod tests {
         assert!(Path::new(&object_path).exists());
 
         // check if object is correct
-        let retrieved = get_object(oid, ObjectType::Blob);
+        let retrieved = get_object(oid.as_str(), ObjectType::Blob);
         assert_eq!(retrieved, content.as_bytes());
 
         // cleanup
