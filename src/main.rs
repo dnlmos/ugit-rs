@@ -2,6 +2,8 @@ mod base;
 mod cli;
 mod data;
 
+use std::path::Path;
+
 use clap::Parser;
 use cli::{Args, Commands, GIT_DIR, init_repository};
 
@@ -24,7 +26,7 @@ fn main() {
         }
         Commands::WriteTree => {
             println!("writing tree");
-            let _ = base::write_tree(".");
+            base::write_tree(Path::new("."));
         }
     }
 }

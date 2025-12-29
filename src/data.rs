@@ -59,13 +59,13 @@ pub enum ObjectType {
 
 impl ObjectType {
     /// Get bytes representation of the ObjectType
-    fn as_bytes(&self) -> &[u8] {
+    pub fn as_bytes(&self) -> &[u8] {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
             ObjectType::Tree => "tree".as_bytes(),
         }
     }
-    fn as_str(&self) -> &str {
+    pub fn as_str(&self) -> &str {
         match self {
             ObjectType::Blob => "blob",
             ObjectType::Tree => "tree",
