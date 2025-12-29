@@ -34,6 +34,7 @@ pub enum Commands {
         #[arg(required = true)]
         file_b: String,
     },
+    WriteTree,
 }
 
 pub fn init_repository(dir: &str) -> io::Result<()> {

@@ -1,6 +1,5 @@
 use std::fs;
-use std::hash::{DefaultHasher, Hash, Hasher};
-use std::io;
+use std::hash::{DefaultHasher, Hasher};
 
 use crate::cli::GIT_DIR;
 
@@ -13,54 +12,95 @@ use crate::cli::GIT_DIR;
 /// # Returns
 ///
 /// Returns a `Result` indicating success or error.
-pub fn hash_object(file_path: &str) -> io::Result<()> {
-    let content = fs::read_to_string(file_path)?;
+pub fn hash_object(file_path: &str, type_: ObjectType) -> u64 {
+    let content = fs::read_to_string(file_path).expect("failed to read the file");
+    let obj = [type_.as_bytes(), b"\x00", content.as_bytes()].concat();
 
     let mut hasher = DefaultHasher::new();
-    content.hash(&mut hasher);
+    hasher.write(&obj);
     let oid = hasher.finish();
+    println!("{oid}");
 
-    fs::write(format!("{GIT_DIR}/objects/{oid}"), content)
+    let path = format!("{}/objects/{}", GIT_DIR, oid);
+    fs::write(&path, obj).expect("failed to write object");
+
+    oid
 }
 
-pub fn get_object(oid: &str) -> io::Result<String> {
-    fs::read_to_string(format!("{}/objects/{}", GIT_DIR, oid))
+pub fn get_object(oid: &u64, expected: ObjectType) -> String {
+    let path = format!("{}/objects/{}", GIT_DIR, oid);
+    let obj = fs::read(&path).expect("failed to read object");
+
+    let null_pos = obj
+        .iter()
+        .position(|&b| b == 0)
+        .expect("invalid object: no null byte");
+
+    let type_ = str::from_utf8(&obj[..null_pos]).expect("invalid type string");
+
+    assert_eq!(
+        type_,
+        expected.as_str(),
+        "Expected {}, got {}",
+        expected.as_str(),
+        type_
+    );
+
+    str::from_utf8(&obj[null_pos + 1..])
+        .expect("error decoding contetnt")
+        .to_string()
+}
+
+pub enum ObjectType {
+    Blob,
+}
+
+impl ObjectType {
+    /// Get bytes representation of the ObjectType
+    fn as_bytes(&self) -> &[u8] {
+        match self {
+            ObjectType::Blob => "blob".as_bytes(),
+        }
+    }
+    fn as_str(&self) -> &str {
+        match self {
+            ObjectType::Blob => "blob",
+        }
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::io;
     use std::{fs::File, io::Write, path::Path};
 
     #[test]
     fn test_hash_object() -> io::Result<()> {
-        // Setup: Create a temporary directory
+        // create a temp directory
         let test_dir = format!("{}/objects", GIT_DIR);
         fs::create_dir_all(&test_dir)?;
 
-        // Create a temporary file
+        // create temp file and write to it
         let file_path = "test_file.txt";
-        let content = "Hello, Git!";
-
-        // Write content to the temporary file
+        let content = "Hello world!";
         let mut file = File::create(file_path)?;
         file.write_all(content.as_bytes())?;
 
-        // Call the hash_object function
-        hash_object(file_path)?;
+        let oid = hash_object(file_path, ObjectType::Blob);
 
-        // Check if the object file was created
-        let oid = {
-            let mut hasher = DefaultHasher::new();
-            content.hash(&mut hasher);
-            hasher.finish()
-        };
+        // check if the object file was created
         let object_path = format!("{}/objects/{}", GIT_DIR, oid);
-
+        println!("{}", object_path);
         assert!(Path::new(&object_path).exists());
+
+        // check if object is correct
+        let retrieved = get_object(&oid, ObjectType::Blob);
+        assert_eq!(retrieved, content);
 
         // cleanup
         fs::remove_file(file_path)?;
+        fs::remove_file(object_path)?;
         fs::remove_dir_all(test_dir)?;
 
         Ok(())
