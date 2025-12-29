@@ -12,11 +12,9 @@ use crate::cli::GIT_DIR;
 /// # Returns
 ///
 /// Returns a `Result` indicating success or error.
-pub fn hash_object(file_path: &str, type_: ObjectType) -> String {
-    let content = fs::read(file_path).expect("failed to read file");
-
+pub fn hash_object(content: &str, type_: ObjectType) -> String {
     let header = format!("{}\0", type_.as_str());
-    let obj = [header.as_bytes(), &content].concat();
+    let obj = [header.as_bytes(), content.as_bytes()].concat();
 
     let mut hasher = Sha1::new();
     hasher.update(&obj);
@@ -56,6 +54,7 @@ pub fn get_object(oid: String, expected: ObjectType) -> String {
 
 pub enum ObjectType {
     Blob,
+    Tree,
 }
 
 impl ObjectType {
@@ -63,11 +62,13 @@ impl ObjectType {
     fn as_bytes(&self) -> &[u8] {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
+            ObjectType::Tree => "tree".as_bytes(),
         }
     }
     fn as_str(&self) -> &str {
         match self {
             ObjectType::Blob => "blob",
+            ObjectType::Tree => "tree",
         }
     }
 }
@@ -79,21 +80,15 @@ mod tests {
     use super::*;
     use std::io;
     use std::path::Path;
-    use std::{fs::File, io::Write};
 
     #[test]
     fn test_hash_object() -> io::Result<()> {
         if !Path::new(format!("{}/objects", GIT_DIR).as_str()).exists() {
             init_repository(GIT_DIR)?;
         }
-
-        // create temp file and write to it
-        let file_path = "test_file.txt";
         let content = "Hello world!";
-        let mut file = File::create(file_path)?;
-        file.write_all(content.as_bytes())?;
 
-        let oid = hash_object(file_path, ObjectType::Blob);
+        let oid = hash_object(content, ObjectType::Blob);
 
         // check if the object file was created
         let object_path = format!("{}/objects/{}", GIT_DIR, oid);
@@ -104,7 +99,6 @@ mod tests {
         assert_eq!(retrieved, content);
 
         // cleanup
-        fs::remove_file(file_path)?;
         fs::remove_file(object_path)?;
 
         Ok(())
