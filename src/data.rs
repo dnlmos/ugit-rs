@@ -12,9 +12,9 @@ use crate::cli::GIT_DIR;
 /// # Returns
 ///
 /// Returns a `Result` indicating success or error.
-pub fn hash_object(content: &str, type_: ObjectType) -> String {
+pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
     let header = format!("{}\0", type_.as_str());
-    let obj = [header.as_bytes(), content.as_bytes()].concat();
+    let obj = [header.as_bytes(), content].concat();
 
     let mut hasher = Sha1::new();
     hasher.update(&obj);
@@ -88,7 +88,7 @@ mod tests {
         }
         let content = "Hello world!";
 
-        let oid = hash_object(content, ObjectType::Blob);
+        let oid = hash_object(content.as_bytes(), ObjectType::Blob);
 
         // check if the object file was created
         let object_path = format!("{}/objects/{}", GIT_DIR, oid);
