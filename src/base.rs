@@ -1,0 +1,351 @@
+use anyhow::anyhow;
+use std::collections::{HashMap, HashSet};
+use std::fs::{self};
+use std::path::{Path, PathBuf};
+
+use anyhow::{Context, Error, Result};
+use walkdir::WalkDir;
+
+use crate::cli::Config;
+use crate::data::{ObjectType, get_object, hash_object};
+
+/// Reads and returns a set of ignored file paths from `.ugitignore`.
+///
+/// Loads patterns from `.ugitignore`, trims and normalizes them, and resolves each
+/// to an absolute path relative to the base directory.
+///
+/// # Arguments
+/// * `config` - Configuration containing the project's base directory.
+///
+/// # Returns
+/// A set of ignored file paths, or an empty set if no ignore file exists.
+fn get_ignored_files(config: &Config) -> HashSet<PathBuf> {
+    let mut ignored_files = HashSet::new();
+
+    if let Ok(content) = fs::read_to_string(config.base_dir.join(".ugitignore")) {
+        content
+            .lines()
+            .filter(|line| !line.is_empty())
+            .for_each(|entry| {
+                ignored_files.insert(config.base_dir.join(Path::new(entry.trim())));
+            });
+    }
+    ignored_files
+}
+
+/// Recursively writes a directory tree to the Git object database.
+///
+/// Reads all non-ignored entries in a directory, hashes files and subdirectories,
+/// and creates a tree object with sorted entries.
+///
+/// # Arguments
+/// * `dir` - The directory to serialize into a tree.
+/// * `config` - Configuration containing the `.ugit` directory path.
+///
+/// # Returns
+/// The SHA-1 ID of the resulting tree object.
+///
+/// # Errors
+/// Returns an error if reading the directory, files, or subdirectories fails,
+/// or if hashing objects fails.
+pub fn write_tree(dir: &Path, config: &Config) -> Result<String> {
+    let ignored_files = get_ignored_files(config);
+    let mut entries: Vec<(ObjectType, String, String)> = Vec::new();
+
+    let read_dir =
+        fs::read_dir(dir).context(format!("Failed to read directory: {}", dir.display()))?;
+
+    for entry in read_dir {
+        let entry = entry.context("Failed to read directory entry")?;
+        let path = entry.path();
+
+        // skip ignored files/dirs
+        if ignored_files.contains(&path) {
+            continue;
+        }
+
+        let file_name = path
+            .file_name()
+            .context(format!("Invalid filename for path: {}", path.display()))?
+            .to_str()
+            .context(format!("Not utf8 filename: {}", path.display()))?
+            .to_string();
+
+        if path.is_file() {
+            let content =
+                fs::read(&path).context(format!("Failed to read file: {}", path.display()))?;
+            let oid = hash_object(&content, ObjectType::Blob, config)?;
+            entries.push((ObjectType::Blob, oid, file_name));
+        } else if path.is_dir() {
+            let oid = write_tree(&path, config)?;
+            entries.push((ObjectType::Tree, oid, file_name));
+        }
+    }
+
+    entries.sort_by(|a, b| a.2.cmp(&b.2));
+
+    let mut tree = String::new();
+    for (obj_type, oid, name) in &entries {
+        tree.push_str(&format!("{} {} {}\n", obj_type.as_str(), oid, name));
+    }
+
+    hash_object(tree.as_bytes(), ObjectType::Tree, config)
+}
+
+/// Parses a tree object and returns its entries.
+///
+/// Reads a tree object by ID, decodes its content, and extracts type, OID, and name for each entry.
+///
+/// # Arguments
+/// * `oid` - The SHA-1 ID of the tree object.
+/// * `config` - Configuration containing the `.ugit` directory path.
+///
+/// # Returns
+/// A list of tuples containing (object type, OID, filename) for each entry in the tree.
+///
+/// # Errors
+/// Returns an error if reading the object fails, is unsupported or if the content is malformed.
+fn iter_tree_entries(oid: &str, config: &Config) -> Result<Vec<(ObjectType, String, String)>> {
+    let tree = get_object(oid, ObjectType::Tree, config)?;
+    let content = str::from_utf8(&tree).expect("failed to decode file");
+    let mut entries: Vec<(ObjectType, String, String)> = Vec::new();
+    for line in content.lines() {
+        if line.is_empty() {
+            continue;
+        }
+
+        let parts: Vec<&str> = line.split_whitespace().collect();
+        if parts.len() < 3 {
+            continue;
+        }
+
+        let obj_type = match parts[0] {
+            "blob" => ObjectType::Blob,
+            "tree" => ObjectType::Tree,
+            _ => return Err(anyhow!("Encountered unsupported object type: {}", parts[0])),
+        };
+
+        let obj_oid = parts[1];
+        let obj_name = parts[2];
+        entries.push((obj_type, obj_oid.to_string(), obj_name.to_string()));
+    }
+    Ok(entries)
+}
+
+/// Recursively retrieves all entries in a tree and its sub-trees.
+///
+/// Walks a tree object and its nested trees, building a map of paths to their object types and OIDs.
+///
+/// # Arguments
+/// * `oid` - The SHA-1 ID of the root tree object.
+/// * `base_path` - The base path to resolve relative file paths.
+/// * `config` - Configuration containing the `.ugit` directory path.
+///
+/// # Returns
+/// A map from file/directory paths to their object type and OID.
+///
+/// # Errors
+/// Returns an error if reading tree entries or nested trees fails.
+fn get_tree(
+    oid: &str,
+    base_path: &Path,
+    config: &Config,
+) -> Result<HashMap<PathBuf, (ObjectType, String)>, Error> {
+    let mut result = HashMap::new();
+
+    for (obj_type, entry_oid, name) in iter_tree_entries(oid, config)? {
+        let path = base_path.join(&name);
+
+        let is_tree = matches!(obj_type, ObjectType::Tree);
+
+        result.insert(path.clone(), (obj_type, entry_oid.clone()));
+
+        if is_tree {
+            let subtree = get_tree(&entry_oid, &path, config)?;
+            result.extend(subtree);
+        }
+    }
+    Ok(result)
+}
+
+/// Clears the working directory by removing all tracked files and directories.
+///
+/// Deletes all files and directories under the base directory, excluding those in `.ugitignore`.
+/// Processes entries in bottom-up order to safely remove nested structures.
+///
+/// # Arguments
+/// * `config` - Configuration containing the project's base directory and ignore list.
+///
+/// # Behavior
+/// Ignores errors during deletion (e.g., permission issues or missing files).
+fn empty_working_dir(config: &Config) {
+    let ignored_files = get_ignored_files(config);
+    for entry in WalkDir::new(&config.base_dir)
+        .contents_first(true) // bottom-up (first files, then corresponding dir)
+        .min_depth(1) // skip the BASE_DIR
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| {
+            // filter out ignored files and paths that contains ignored dirs
+            // TODO implement better globbing
+            let path = e.path();
+            !ignored_files
+                .iter()
+                .any(|ignored| path.starts_with(ignored))
+        })
+    {
+        let path = entry.path();
+        // println!("[deleting] {:?}", path);
+
+        // since it may contain ignored file, ignore errors
+        if path.is_file() {
+            let _ = fs::remove_file(path);
+        } else if path.is_dir() {
+            let _ = fs::remove_dir(path);
+        }
+    }
+}
+
+/// Restores the working directory from a tree object.
+///
+/// Clears the current working directory, then recreates all files and directories
+/// from the given tree OID according to the object database.
+///
+/// # Arguments
+/// * `oid` - The SHA-1 ID of the tree object to restore.
+/// * `config` - Configuration containing base directory and `.ugit` path.
+///
+/// # Returns
+/// `Ok(())` on success, or an error if reading objects or writing files fails.
+pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
+    empty_working_dir(config);
+    let tree_map = get_tree(oid, &config.base_dir, config)?;
+
+    for (path, (obj_type, entry_oid)) in tree_map {
+        match obj_type {
+            ObjectType::Blob => {
+                if let Some(parent) = path.parent() {
+                    fs::create_dir_all(parent).ok();
+                }
+                let data = get_object(&entry_oid, ObjectType::Blob, config)?;
+                fs::write(path, data).expect("Failed to write blob");
+            }
+            ObjectType::Tree => fs::create_dir_all(path).expect("Failed to create directory"),
+        }
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::cli::{Config, init_repository};
+    use tempfile::{TempDir, tempdir};
+
+    fn create_test_repo() -> Result<(TempDir, Config)> {
+        let temp_dir = tempdir().expect("Failed to create temporary directory");
+        let config = Config {
+            base_dir: temp_dir.path().to_path_buf(),
+            git_dir: temp_dir.path().join(".ugit"),
+        };
+
+        // println!("BASE_DIR> {:?}", config.base_dir);
+        // println!("GIT_DIR> {:?}", config.git_dir);
+
+        init_repository(&config)?;
+        Ok((temp_dir, config))
+    }
+
+    /// create some file structure, generated by AI
+    fn create_test_file_structure(base_dir: &Path) -> Result<()> {
+        fs::write(base_dir.join("file1.txt"), "Hello, World!")?;
+        fs::write(base_dir.join("file2.txt"), "Test content")?;
+        fs::write(
+            base_dir.join("README.md"),
+            "# My Project\n\nThis is a test.",
+        )?;
+
+        // create a directory with files
+        let sub_dir = base_dir.join("src");
+        fs::create_dir(&sub_dir)?;
+        fs::write(
+            sub_dir.join("main.rs"),
+            "fn main() {\n    println!(\"Hello\");\n}",
+        )?;
+        fs::write(
+            sub_dir.join("lib.rs"),
+            "pub fn add(a: i32, b: i32) -> i32 {\n    a + b\n}",
+        )?;
+
+        // Create a nested directory
+        let nested_dir = sub_dir.join("utils");
+        fs::create_dir(&nested_dir)?;
+        fs::write(nested_dir.join("helper.rs"), "pub fn helper() {}")?;
+        fs::write(
+            nested_dir.join("helper_ignored.rs"),
+            "pub fn helper_ignored() {}",
+        )?;
+
+        fs::write(
+            base_dir.join(".ugitignore"),
+            ".ugit/\n .ugitignore\n src/utils/helper_ignored.rs\n",
+        )?;
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_writing_tree() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
+        create_test_file_structure(temp_dir.path()).expect("Failed to create file structure");
+
+        let tree_oid = write_tree(temp_dir.path(), &config)?;
+
+        println!("Tree OID: {}", tree_oid);
+        assert!(!tree_oid.is_empty());
+
+        // Verify the tree object was created
+        let tree_path = config.git_dir.join("objects").join(&tree_oid);
+        assert!(tree_path.exists());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_reading_tree() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
+        create_test_file_structure(temp_dir.path()).expect("Failed to create file structure");
+
+        let entries_before = get_repository_contents(&config)?;
+        let tree_oid = write_tree(temp_dir.path(), &config)?;
+        read_tree(&tree_oid, &config)?;
+        let entries_after = get_repository_contents(&config)?;
+
+        assert_eq!(entries_before, entries_after);
+
+        Ok(())
+    }
+
+    /// With respect to .ugitignore
+    fn get_repository_contents(config: &Config) -> Result<Vec<PathBuf>> {
+        let ignored_files = get_ignored_files(config);
+        let mut entries: Vec<PathBuf> = Vec::new();
+        for entry in WalkDir::new(&config.base_dir)
+            .contents_first(true) // bottom-up (first files, then corresponding dir)
+            .min_depth(1) // skip the BASE_DIR
+            .into_iter()
+            .filter_map(Result::ok)
+            .filter(|e| {
+                // filter out ignored files and paths that contains ignored dirs
+                // TODO implement better globbing
+                let path = e.path();
+                !ignored_files
+                    .iter()
+                    .any(|ignored| path.starts_with(ignored))
+            })
+        {
+            entries.push(entry.into_path());
+        }
+        Ok(entries)
+    }
+}

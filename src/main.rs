@@ -1,47 +1,28 @@
-use clap::{Parser, Subcommand};
-use std::fs::create_dir_all;
-use std::{fs::exists, io::Result};
+mod base;
+mod cli;
+mod data;
 
-#[derive(Parser)]
-#[command(version, about, long_about = None)]
-struct Args {
-    /// Name of the command
-    #[command(subcommand)]
-    command: Commands,
-}
+use clap::Parser;
+use cli::{Args, Commands, init_repository};
 
-#[derive(Subcommand)]
-enum Commands {
-    /// Initialize a new repository
-    Init,
-    /// Add files to staging
-    Add {
-        #[arg(required = true)]
-        files: Vec<String>,
-    },
-    /// Commit staged changes
-    Commit {
-        #[arg(short, long, default_value = "")]
-        message: String,
-    },
-    /// Get diff of two files
-    Diff {
-        #[arg(required = true)]
-        file_a: String,
-        #[arg(required = true)]
-        file_b: String,
-    },
-}
+use crate::cli::Config;
 
 fn main() {
-    let git_dir = ".ugit";
     let args = Args::parse();
 
+    let config = Config {
+        base_dir: std::path::PathBuf::from("."),
+        git_dir: std::path::PathBuf::from(".").join(".ugit"),
+    };
+
     match args.command {
-        Commands::Init => {
-            init_repository(git_dir)
-                .expect("Error occured when attempting to initialize repository");
-        }
+        Commands::Init => match init_repository(&config) {
+            Ok(_) => println!("Repository initialized successfully."),
+            Err(e) => eprintln!(
+                "Error occurred when attempting to initialize repository: {}",
+                e
+            ),
+        },
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
         }
@@ -51,15 +32,19 @@ fn main() {
         Commands::Diff { file_a, file_b } => {
             println!("Diffing two files: {} | {}", file_a, file_b);
         }
-    }
-}
-
-fn init_repository(dir: &str) -> Result<()> {
-    if exists(dir).is_ok() {
-        println!("Repository already initialized");
-        Ok(())
-    } else {
-        println!("Initializing repository {}...", dir);
-        create_dir_all(format!("{}/objects", dir))
+        Commands::WriteTree => {
+            println!("Writing tree");
+            match base::write_tree(&config.base_dir, &config) {
+                Ok(_) => println!("Writing tree successfully."),
+                Err(e) => eprintln!("Error occured when attempting to write tree: {}", e),
+            }
+        }
+        Commands::ReadTree { tree_oid } => {
+            println!("Reading tree");
+            match base::read_tree(&tree_oid, &config) {
+                Ok(_) => println!("Reading tree successfully."),
+                Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
+            }
+        }
     }
 }
