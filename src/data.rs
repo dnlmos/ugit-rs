@@ -1,47 +1,59 @@
+use anyhow::{Error, Result};
 use sha1::{Digest, Sha1};
 use std::{fmt, fs};
 
-use crate::cli::GIT_DIR;
+use crate::cli::Config;
 
-/// Hashes an object from the given content and writes it to the object store.
+/// Hashes object content and stores it in the Git object database.
+///
+/// Constructs a header with the object type, concatenates it with the content,
+/// computes the SHA-1 hash, and writes the full object to `.ugit/objects`.
 ///
 /// # Arguments
-///
-/// * `content` - The raw byte content of the object.
-/// * `type_` - The type of Git object (e.g., Blob, Tree).
+/// * `content` - The raw object data.
+/// * `type_` - The type of the Git object (blob, tree).
+/// * `config` - Configuration containing the `.ugit` directory path.
 ///
 /// # Returns
+/// The SHA-1 object ID (OID) as a hexadecimal string on success.
 ///
-/// Returns the hexadecimal SHA-1 hash (OID) of the stored object.
-pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
+/// # Errors
+/// Returns an error if writing the object to disk fails.
+pub fn hash_object(content: &[u8], type_: ObjectType, config: &Config) -> Result<String, Error> {
     let header = format!("{}\0", type_.as_str());
     let obj = [header.as_bytes(), content].concat();
 
     let mut hasher = Sha1::new();
     hasher.update(&obj);
     let result = hasher.finalize();
-
     let oid = hex::encode(result);
 
-    let path = format!("{}/objects/{}", GIT_DIR, oid);
-    fs::write(path, obj).unwrap();
+    let path = config.git_dir.join("objects").join(&oid);
+    fs::write(path, obj)?;
 
-    oid
+    Ok(oid)
 }
 
-/// Reads and validates a Git object from the object store.
+/// Reads and validates a Git object from the database.
+///
+/// Loads an object by its SHA-1 ID, verifies its type, and returns the raw content.
 ///
 /// # Arguments
-///
-/// * `oid` - The hexadecimal object ID (OID) to retrieve.
-/// * `expected` - The expected type of the object (e.g., Blob, Tree).
+/// * `oid` - The object ID (SHA-1 hash) to retrieve.
+/// * `expected` - The expected type of the object (blob, tree).
+/// * `config` - Configuration containing the `.ugit` directory path.
 ///
 /// # Returns
+/// The object's content (after the header) on success.
 ///
-/// Returns the decoded content of the object (excluding header).
-pub fn get_object(oid: &str, expected: ObjectType) -> Vec<u8> {
-    let path = format!("{}/objects/{}", GIT_DIR, oid);
-    let obj = fs::read(&path).expect("failed to read object");
+/// # Errors
+/// Returns an error if:
+/// - The object file cannot be read.
+/// - The object has no null byte (invalid format).
+/// - The object type does not match `expected`.
+pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Vec<u8>, Error> {
+    let path = config.git_dir.join("objects").join(oid);
+    let obj = fs::read(&path)?;
 
     let null_pos = obj
         .iter()
@@ -58,7 +70,7 @@ pub fn get_object(oid: &str, expected: ObjectType) -> Vec<u8> {
         type_
     );
 
-    obj[null_pos + 1..].to_owned()
+    Ok(obj[null_pos + 1..].to_owned())
 }
 
 pub enum ObjectType {
@@ -67,7 +79,6 @@ pub enum ObjectType {
 }
 
 impl ObjectType {
-    /// Get bytes representation of the ObjectType
     pub fn as_bytes(&self) -> &[u8] {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
@@ -96,31 +107,32 @@ impl fmt::Debug for ObjectType {
 
 #[cfg(test)]
 mod tests {
-    use crate::cli::init_repository;
-
     use super::*;
-    use std::io;
-    use std::path::Path;
+    use crate::cli::{Config, init_repository};
+    use tempfile::tempdir;
 
     #[test]
-    fn test_hash_object() -> io::Result<()> {
-        if !Path::new(format!("{}/objects", GIT_DIR).as_str()).exists() {
-            init_repository()?;
-        }
+    fn test_hash_object() -> Result<()> {
+        let temp_dir = tempdir().expect("Failed to create temporary directory");
+
+        let config = Config {
+            base_dir: temp_dir.path().to_path_buf(),
+            git_dir: temp_dir.path().join(".ugit"),
+        };
+        init_repository(&config)?;
+
         let content = "Hello world!";
 
-        let oid = hash_object(content.as_bytes(), ObjectType::Blob);
+        let oid = hash_object(content.as_bytes(), ObjectType::Blob, &config)
+            .expect("Failed to hash object");
 
-        // check if the object file was created
-        let object_path = format!("{}/objects/{}", GIT_DIR, oid);
-        assert!(Path::new(&object_path).exists());
+        let path = config.git_dir.join("objects").join(&oid);
+        assert!(path.exists());
 
-        // check if object is correct
-        let retrieved = get_object(oid.as_str(), ObjectType::Blob);
+        let retrieved =
+            get_object(oid.as_str(), ObjectType::Blob, &config).expect("Failed to retrieve object");
+
         assert_eq!(retrieved, content.as_bytes());
-
-        // cleanup
-        fs::remove_file(object_path)?;
 
         Ok(())
     }

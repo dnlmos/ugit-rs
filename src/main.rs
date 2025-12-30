@@ -2,19 +2,27 @@ mod base;
 mod cli;
 mod data;
 
-use std::path::Path;
-
 use clap::Parser;
 use cli::{Args, Commands, init_repository};
-use ugit_rs::cli::BASE_DIR;
+
+use crate::cli::Config;
 
 fn main() {
     let args = Args::parse();
 
+    let config = Config {
+        base_dir: std::path::PathBuf::from("."),
+        git_dir: std::path::PathBuf::from(".").join(".ugit"),
+    };
+
     match args.command {
-        Commands::Init => {
-            init_repository().expect("Error occured when attempting to initialize repository");
-        }
+        Commands::Init => match init_repository(&config) {
+            Ok(_) => println!("Repository initialized successfully."),
+            Err(e) => eprintln!(
+                "Error occurred when attempting to initialize repository: {}",
+                e
+            ),
+        },
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
         }
@@ -26,11 +34,17 @@ fn main() {
         }
         Commands::WriteTree => {
             println!("Writing tree");
-            base::write_tree(Path::new(BASE_DIR));
+            match base::write_tree(&config.base_dir, &config) {
+                Ok(_) => println!("Writing tree successfully."),
+                Err(e) => eprintln!("Error occured when attempting to write tree: {}", e),
+            }
         }
-        Commands::ReadTree => {
+        Commands::ReadTree { tree_oid } => {
             println!("Reading tree");
-            base::read_tree("9ae035d0aef480ee04f5f7dc72ddb23e96749e63");
+            match base::read_tree(&tree_oid, &config) {
+                Ok(_) => println!("Reading tree successfully."),
+                Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
+            }
         }
     }
 }

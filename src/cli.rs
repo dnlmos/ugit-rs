@@ -1,9 +1,23 @@
+use anyhow::{Error, Result};
 use clap::{Parser, Subcommand};
 use std::fs::{self};
-use std::io::{self};
 
-pub const BASE_DIR: &str = "./test_dir";
-pub const GIT_DIR: &str = "./test_dir/.ugit";
+pub struct Config {
+    pub base_dir: std::path::PathBuf,
+    pub git_dir: std::path::PathBuf,
+}
+
+impl std::default::Default for Config {
+    // default paths
+    fn default() -> Self {
+        let base = std::path::PathBuf::from(".");
+        let git = base.join(".ugit");
+        Self {
+            base_dir: base,
+            git_dir: git,
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(version, about, long_about = None)]
@@ -35,15 +49,19 @@ pub enum Commands {
         file_b: String,
     },
     WriteTree,
-    ReadTree,
+    ReadTree {
+        #[arg(required = true)]
+        tree_oid: String,
+    },
 }
 
-pub fn init_repository() -> io::Result<()> {
-    if fs::exists(GIT_DIR)? {
+pub fn init_repository(config: &Config) -> Result<(), Error> {
+    if fs::exists(config.git_dir.join("objects"))? {
         println!("Repository already initialized");
         Ok(())
     } else {
-        println!("Initializing repository {}...", GIT_DIR);
-        fs::create_dir_all(format!("{}/objects", GIT_DIR))
+        println!("Initializing repository {}...", &config.git_dir.display());
+        fs::create_dir_all(config.git_dir.join("objects"))?;
+        Ok(())
     }
 }
