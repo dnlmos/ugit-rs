@@ -3,15 +3,16 @@ use std::{fmt, fs};
 
 use crate::cli::GIT_DIR;
 
-/// Hashes an object from the file at the given path and writes it to the object store.
+/// Hashes an object from the given content and writes it to the object store.
 ///
 /// # Arguments
 ///
-/// * `file_path` - A string slice that holds the path to the file to be hashed.
+/// * `content` - The raw byte content of the object.
+/// * `type_` - The type of Git object (e.g., Blob, Tree).
 ///
 /// # Returns
 ///
-/// Returns a `Result` indicating success or error.
+/// Returns the hexadecimal SHA-1 hash (OID) of the stored object.
 pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
     let header = format!("{}\0", type_.as_str());
     let obj = [header.as_bytes(), content].concat();
@@ -28,6 +29,16 @@ pub fn hash_object(content: &[u8], type_: ObjectType) -> String {
     oid
 }
 
+/// Reads and validates a Git object from the object store.
+///
+/// # Arguments
+///
+/// * `oid` - The hexadecimal object ID (OID) to retrieve.
+/// * `expected` - The expected type of the object (e.g., Blob, Tree).
+///
+/// # Returns
+///
+/// Returns the decoded content of the object (excluding header).
 pub fn get_object(oid: &str, expected: ObjectType) -> Vec<u8> {
     let path = format!("{}/objects/{}", GIT_DIR, oid);
     let obj = fs::read(&path).expect("failed to read object");

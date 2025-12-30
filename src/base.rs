@@ -6,6 +6,16 @@ use ugit_rs::cli::{BASE_DIR, GIT_DIR};
 
 use crate::data::{ObjectType, get_object, hash_object};
 
+/// Reads and parses the `.ugitignore` file to collect ignored file paths.
+///
+/// # Returns
+///
+/// Returns a `HashSet<PathBuf>` containing relative paths of files and directories to ignore.
+///
+/// # Notes
+///
+/// - Resolves paths relative to `BASE_DIR`.
+/// - Returns empty HashSet if .ugitignore is not present
 fn get_ignored_files() -> HashSet<PathBuf> {
     let mut ignored_files = HashSet::new();
 
@@ -21,6 +31,23 @@ fn get_ignored_files() -> HashSet<PathBuf> {
     ignored_files
 }
 
+/// Recursively builds a Git tree object from the contents of a directory
+/// and saves it to object store.
+///
+/// # Arguments
+///
+/// * `dir` - The path to the directory to serialize into a tree.
+///
+/// # Returns
+///
+/// Returns the OID (hex string) of the resulting tree object.
+///
+/// # Notes
+///
+/// - Ignores files and directories listed in `.ugitignore`.
+/// - Handles nested directories by recursively calling `write_tree`.
+/// - Entries are sorted alphabetically by name before hashing.
+/// - Uses `hash_object` to compute the tree's OID and saving to object store.
 pub fn write_tree(dir: &Path) -> String {
     let ignored_files = get_ignored_files();
     let mut entries: Vec<(ObjectType, String, String)> = Vec::new();
@@ -62,6 +89,20 @@ pub fn write_tree(dir: &Path) -> String {
     hash_object(tree.as_bytes(), ObjectType::Tree)
 }
 
+/// Parses a Git tree object and returns its entries.
+///
+/// # Arguments
+///
+/// * `oid` - The hexadecimal object ID of the tree to parse.
+///
+/// # Returns
+///
+/// Returns a vector of tuples containing `(ObjectType, OID, name)` for each entry in the tree.
+///
+/// # Notes
+///
+/// - Reads and validates the tree object using `get_object`.
+/// - TODO(fix) Handles only `blob` and `tree` types; unknown types default to `Blob`.
 fn iter_tree_entries(oid: &str) -> Vec<(ObjectType, String, String)> {
     let tree = get_object(oid, ObjectType::Tree);
     let content = str::from_utf8(&tree).expect("failed to decode file");
@@ -91,6 +132,22 @@ fn iter_tree_entries(oid: &str) -> Vec<(ObjectType, String, String)> {
     entries
 }
 
+/// Recursively retrieves all files and subdirectories from a Git tree object.
+///
+/// # Arguments
+///
+/// * `oid` - The OID of the tree object to traverse.
+/// * `base_path` - The base path where the tree's contents are rooted.
+///
+/// # Returns
+///
+/// Returns a `HashMap<PathBuf, (ObjectType, String)>` mapping each file/directory path to its type and OID.
+///
+/// # Notes
+///
+/// - Uses `iter_tree_entries` to parse tree entries.
+/// - Recursively processes nested trees (directories).
+/// - Builds a complete hierarchical representation of the tree's contents.
 fn get_tree(oid: &str, base_path: &Path) -> HashMap<PathBuf, (ObjectType, String)> {
     let mut result = HashMap::new();
 
@@ -109,6 +166,17 @@ fn get_tree(oid: &str, base_path: &Path) -> HashMap<PathBuf, (ObjectType, String
     result
 }
 
+/// Restores a Git tree (and its contents) to the working directory.
+///
+/// # Arguments
+///
+/// * `oid` - The OID of the tree object to reconstruct.
+///
+/// # Notes
+///
+/// - Recursively recreates directories and files based on the tree structure.
+/// - Creates missing directories using `fs::create_dir_all`.
+/// - Writes blob content to files using `get_object`.
 pub fn read_tree(oid: &str) {
     let tree_map = get_tree(oid, Path::new(BASE_DIR));
 
