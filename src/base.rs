@@ -1,6 +1,8 @@
 use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
+use std::fmt::Write as _;
 use std::fs::{self};
+use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Error, Result};
@@ -231,9 +233,30 @@ pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
                 fs::write(path, data).expect("Failed to write blob");
             }
             ObjectType::Tree => fs::create_dir_all(path).expect("Failed to create directory"),
+            _ => return Err(anyhow!("Encountered unsupported object type: {}", obj_type)),
         }
     }
     Ok(())
+}
+
+/// # Example
+/// ```
+/// tree 5e550586c91fce59e0006799e0d46b3948f05693
+///
+/// This is the commit message!
+/// ```
+pub fn commit(message: String, config: &Config) -> Result<String> {
+    let mut commit = String::new();
+
+    let tree_hash = write_tree(&config.base_dir, config)
+        .context("Could not generate tree hash during commit")?;
+
+    write!(&mut commit, "tree {}\n\n{}\n", tree_hash, message)
+        .context("Failed to format commit object")?;
+
+    let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
+        .context("Failed to save commit to object database")?;
+    Ok(commit_oid)
 }
 
 #[cfg(test)]
@@ -347,5 +370,19 @@ mod tests {
             entries.push(entry.into_path());
         }
         Ok(entries)
+    }
+
+    #[test]
+    fn create_commit() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
+        match commit(String::from("This is the test commit message"), &config) {
+            Ok(res) => println!(
+                "Writing commit successfully.\n{}\nSaved object:\n{:?}",
+                res,
+                str::from_utf8(&get_object(res.as_str(), ObjectType::Commit, &config).unwrap())
+            ),
+            Err(e) => eprintln!("Error occured when attempting to write commit: {}", e),
+        }
+        Ok(())
     }
 }

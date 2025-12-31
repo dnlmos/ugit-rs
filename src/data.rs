@@ -76,6 +76,7 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 pub enum ObjectType {
     Blob,
     Tree,
+    Commit,
 }
 
 impl ObjectType {
@@ -83,12 +84,14 @@ impl ObjectType {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
             ObjectType::Tree => "tree".as_bytes(),
+            ObjectType::Commit => "commit".as_bytes(),
         }
     }
     pub fn as_str(&self) -> &str {
         match self {
             ObjectType::Blob => "blob",
             ObjectType::Tree => "tree",
+            ObjectType::Commit => "commit",
         }
     }
 }

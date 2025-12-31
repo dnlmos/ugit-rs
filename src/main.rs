@@ -26,9 +26,10 @@ fn main() {
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
         }
-        Commands::Commit { message } => {
-            println!("Committing with message: {}", message);
-        }
+        Commands::Commit { message } => match base::commit(message, &config) {
+            Ok(_) => println!("Writing commit successfully."),
+            Err(e) => eprintln!("Error occured when attempting to write commit: {}", e),
+        },
         Commands::Diff { file_a, file_b } => {
             println!("Diffing two files: {} | {}", file_a, file_b);
         }
