@@ -339,10 +339,12 @@ mod tests {
         let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
         create_test_file_structure(temp_dir.path()).expect("Failed to create file structure");
 
-        let entries_before = get_repository_contents(&config)?;
+        let mut entries_before = get_repository_contents(&config)?;
+        entries_before.sort();
         let tree_oid = write_tree(temp_dir.path(), &config)?;
         read_tree(&tree_oid, &config)?;
-        let entries_after = get_repository_contents(&config)?;
+        let mut entries_after = get_repository_contents(&config)?;
+        entries_after.sort();
 
         assert_eq!(entries_before, entries_after);
 
