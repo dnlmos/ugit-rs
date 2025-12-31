@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use sha1::{Digest, Sha1};
 use std::{fmt, fs};
 
@@ -71,6 +71,20 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     );
 
     Ok(obj[null_pos + 1..].to_owned())
+}
+
+pub fn set_head(oid: &str, config: &Config) -> Result<()> {
+    fs::write(config.git_dir.join("HEAD"), oid)?;
+    Ok(())
+}
+
+pub fn get_head(config: &Config) -> Result<String> {
+    let head_path = config.git_dir.join("HEAD");
+
+    let content = fs::read_to_string(&head_path)
+        .with_context(|| format!("Could not read HEAD file at {}", head_path.display()))?;
+
+    Ok(content.trim().to_string())
 }
 
 pub enum ObjectType {

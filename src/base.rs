@@ -2,14 +2,13 @@ use anyhow::anyhow;
 use std::collections::{HashMap, HashSet};
 use std::fmt::Write as _;
 use std::fs::{self};
-use std::io::Write as _;
 use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
 
 use crate::cli::Config;
-use crate::data::{ObjectType, get_object, hash_object};
+use crate::data::{ObjectType, get_object, hash_object, set_head};
 
 /// Reads and returns a set of ignored file paths from `.ugitignore`.
 ///
@@ -256,6 +255,7 @@ pub fn commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
+    set_head(&commit_oid, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -376,11 +376,15 @@ mod tests {
     fn create_commit() -> Result<()> {
         let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
         match commit(String::from("This is the test commit message"), &config) {
-            Ok(res) => println!(
-                "Writing commit successfully.\n{}\nSaved object:\n{:?}",
-                res,
-                str::from_utf8(&get_object(res.as_str(), ObjectType::Commit, &config).unwrap())
-            ),
+            Ok(res) => {
+                println!(
+                    "Writing commit successfully.\n{}\nSaved object:\n{:?}",
+                    res,
+                    str::from_utf8(&get_object(res.as_str(), ObjectType::Commit, &config).unwrap())
+                );
+                // check if HEAD was set properly
+                assert_eq!(res, fs::read_to_string(config.git_dir.join("HEAD"))?)
+            }
             Err(e) => eprintln!("Error occured when attempting to write commit: {}", e),
         }
         Ok(())
