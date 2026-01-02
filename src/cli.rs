@@ -54,6 +54,10 @@ pub enum Commands {
         tree_oid: String,
     },
     Log,
+    Checkout {
+        #[arg(required = true)]
+        oid: String,
+    },
 }
 
 pub fn init_repository(config: &Config) -> Result<(), Error> {

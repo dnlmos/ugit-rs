@@ -352,13 +352,22 @@ pub fn log(config: &Config) -> Result<String> {
             .with_context(|| format!("Failed to read history at {}", oid))?;
         writeln!(history, "{} {}", "commit".yellow(), oid.yellow().bold())?;
         for line in commit.message.lines() {
-            writeln!(history, "    {}", line)?;
+            writeln!(history, "     | {}", line)?;
         }
+        writeln!(history, "     |")?;
 
         writeln!(history)?;
         current_oid = commit.parent;
     }
     Ok(history)
+}
+
+pub fn checkout(oid: &str, config: &Config) -> Result<()> {
+    let commit =
+        get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
+    read_tree(&commit.tree, config)
+        .with_context(|| format!("Error reading tree {}", commit.tree))?;
+    set_head(oid, config)
 }
 
 #[cfg(test)]
@@ -478,19 +487,43 @@ mod tests {
     }
 
     #[test]
-    fn test_create_commit() -> Result<()> {
+    fn test_create_and_checkout_integrity() -> Result<()> {
         let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
-        let first_oid = create_commit(String::from("This is the test commit message"), &config)?;
-        println!("OID:{}\n{}", first_oid, get_commit(&first_oid, &config)?);
-        let second_oid = create_commit(
-            String::from("This is the SECOND test commit message"),
-            &config,
-        )?;
-        let third_oid = create_commit(
-            String::from("This is the THIRD test commit message"),
-            &config,
-        )?;
-        println!("{}", log(&config)?);
+
+        // first commit
+        create_test_file_structure(temp_dir.path())?;
+        let first_oid = create_commit("First message".to_string(), &config)?;
+        let mut state_one = get_repository_contents(&config)?;
+        state_one.sort();
+
+        // add extra file and create second commit
+        std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
+        let second_oid = create_commit("Second message".to_string(), &config)?;
+        let mut state_two = get_repository_contents(&config)?;
+        state_two.sort();
+
+        // checkout first commit and compare file system
+        checkout(&first_oid, &config)?;
+        let mut current_entries = get_repository_contents(&config)?;
+        current_entries.sort();
+
+        assert_eq!(get_head(&config)?, first_oid);
+        assert_eq!(
+            current_entries, state_one,
+            "FS should match first commit state"
+        );
+
+        // checkout second commit
+        checkout(&second_oid, &config)?;
+        let mut current_entries = get_repository_contents(&config)?;
+        current_entries.sort();
+
+        assert_eq!(get_head(&config)?, second_oid);
+        assert_eq!(
+            current_entries, state_two,
+            "FS should match Second Commit state"
+        );
+
         Ok(())
     }
 }

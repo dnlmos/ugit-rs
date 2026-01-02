@@ -5,7 +5,10 @@ mod data;
 use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
-use crate::{base::log, cli::Config};
+use crate::{
+    base::{checkout, log},
+    cli::Config,
+};
 
 fn main() {
     let args = Args::parse();
@@ -51,6 +54,12 @@ fn main() {
             match log(&config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
+            };
+        }
+        Commands::Checkout { oid } => {
+            match checkout(&oid, &config) {
+                Ok(_) => println!("Switched to {}", oid),
+                Err(e) => eprintln!("Error occured when attempting to checkout {}: {}", oid, e),
             };
         }
     }
