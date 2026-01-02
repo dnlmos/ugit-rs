@@ -1,4 +1,4 @@
-use anyhow::{Error, Result};
+use anyhow::{Context, Error, Result};
 use sha1::{Digest, Sha1};
 use std::{fmt, fs};
 
@@ -51,31 +51,51 @@ pub fn hash_object(content: &[u8], type_: ObjectType, config: &Config) -> Result
 /// - The object file cannot be read.
 /// - The object has no null byte (invalid format).
 /// - The object type does not match `expected`.
-pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Vec<u8>, Error> {
+pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Vec<u8>> {
     let path = config.git_dir.join("objects").join(oid);
-    let obj = fs::read(&path)?;
+
+    let obj = fs::read(&path)
+        .with_context(|| format!("Failed to read object '{}' at {:?}", oid, path))?;
 
     let null_pos = obj
         .iter()
         .position(|&b| b == 0)
-        .expect("invalid object: no null byte");
+        .with_context(|| format!("Object '{}': missing null terminator in header", oid))?;
 
-    let type_ = str::from_utf8(&obj[..null_pos]).expect("invalid type string");
+    let type_str = str::from_utf8(&obj[..null_pos])
+        .with_context(|| format!("Object '{}' has an invalid UTF-8 header", oid))?;
 
     assert_eq!(
-        type_,
+        type_str,
         expected.as_str(),
         "Expected {}, got {}",
         expected.as_str(),
-        type_
+        type_str
     );
 
     Ok(obj[null_pos + 1..].to_owned())
 }
 
+pub fn set_head(oid: &str, config: &Config) -> Result<()> {
+    fs::write(config.git_dir.join("HEAD"), oid)?;
+    Ok(())
+}
+
+/// # Returns
+/// `oid` of the commit object in HEAD file
+pub fn get_head(config: &Config) -> Result<String> {
+    let head_path = config.git_dir.join("HEAD");
+
+    let content = fs::read_to_string(&head_path)
+        .with_context(|| format!("Could not read HEAD file at {}", head_path.display()))?;
+
+    Ok(content.trim().to_string())
+}
+
 pub enum ObjectType {
     Blob,
     Tree,
+    Commit,
 }
 
 impl ObjectType {
@@ -83,12 +103,14 @@ impl ObjectType {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
             ObjectType::Tree => "tree".as_bytes(),
+            ObjectType::Commit => "commit".as_bytes(),
         }
     }
     pub fn as_str(&self) -> &str {
         match self {
             ObjectType::Blob => "blob",
             ObjectType::Tree => "tree",
+            ObjectType::Commit => "commit",
         }
     }
 }
