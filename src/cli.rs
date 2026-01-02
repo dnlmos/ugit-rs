@@ -53,6 +53,7 @@ pub enum Commands {
         #[arg(required = true)]
         tree_oid: String,
     },
+    Log,
 }
 
 pub fn init_repository(config: &Config) -> Result<(), Error> {

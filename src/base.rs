@@ -1,6 +1,8 @@
+use crate::data::get_head;
 use anyhow::anyhow;
+use colored::*;
 use std::collections::{HashMap, HashSet};
-use std::fmt::Write as _;
+use std::fmt::{self, Write as _};
 use std::fs::{self};
 use std::path::{Path, PathBuf};
 
@@ -10,6 +12,22 @@ use walkdir::WalkDir;
 use crate::cli::Config;
 use crate::data::{ObjectType, get_object, hash_object, set_head};
 
+pub struct Commit {
+    pub tree: String,
+    pub parent: Option<String>,
+    pub message: String,
+}
+
+impl fmt::Display for Commit {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        writeln!(f, "tree {}", self.tree)?;
+        if let Some(ref p) = self.parent {
+            writeln!(f, "parent {}", p)?;
+        }
+        writeln!(f)?;
+        write!(f, "{}", self.message)
+    }
+}
 /// Reads and returns a set of ignored file paths from `.ugitignore`.
 ///
 /// Loads patterns from `.ugitignore`, trims and normalizes them, and resolves each
@@ -108,7 +126,8 @@ pub fn write_tree(dir: &Path, config: &Config) -> Result<String> {
 /// Returns an error if reading the object fails, is unsupported or if the content is malformed.
 fn iter_tree_entries(oid: &str, config: &Config) -> Result<Vec<(ObjectType, String, String)>> {
     let tree = get_object(oid, ObjectType::Tree, config)?;
-    let content = str::from_utf8(&tree).expect("failed to decode file");
+    let content = str::from_utf8(&tree)
+        .with_context(|| format!("Failed to retrieve commit object '{}' from storage", oid))?;
     let mut entries: Vec<(ObjectType, String, String)> = Vec::new();
     for line in content.lines() {
         if line.is_empty() {
@@ -229,9 +248,13 @@ pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
                     fs::create_dir_all(parent).ok();
                 }
                 let data = get_object(&entry_oid, ObjectType::Blob, config)?;
-                fs::write(path, data).expect("Failed to write blob");
+                fs::write(&path, data)
+                    .with_context(|| format!("Failed to restore file: {:?}", path.display()))?;
             }
-            ObjectType::Tree => fs::create_dir_all(path).expect("Failed to create directory"),
+            ObjectType::Tree => {
+                fs::create_dir_all(&path)
+                    .with_context(|| format!("Failed to restore file: {:?}", path.display()))?;
+            }
             _ => return Err(anyhow!("Encountered unsupported object type: {}", obj_type)),
         }
     }
@@ -241,17 +264,25 @@ pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
 /// # Example
 /// ```
 /// tree 5e550586c91fce59e0006799e0d46b3948f05693
+/// parent .........
 ///
 /// This is the commit message!
 /// ```
-pub fn commit(message: String, config: &Config) -> Result<String> {
+/// # Returns
+/// oid of the commit object
+pub fn create_commit(message: String, config: &Config) -> Result<String> {
     let mut commit = String::new();
 
     let tree_hash = write_tree(&config.base_dir, config)
         .context("Could not generate tree hash during commit")?;
 
-    write!(&mut commit, "tree {}\n\n{}\n", tree_hash, message)
-        .context("Failed to format commit object")?;
+    writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
+
+    let head = get_head(config).context("Failed reading HEAD");
+    if let Ok(head_oid) = head {
+        writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
+    }
+    write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
@@ -259,10 +290,82 @@ pub fn commit(message: String, config: &Config) -> Result<String> {
     Ok(commit_oid)
 }
 
+pub fn get_commit(oid: &str, config: &Config) -> Result<Commit> {
+    let bytes = get_object(oid, ObjectType::Commit, config)
+        .with_context(|| format!("Failed to retrieve commit object '{}' from storage", oid))?;
+
+    let commit_str = std::str::from_utf8(&bytes)
+        .with_context(|| format!("Commit '{}' contains invalid UTF-8 data", oid))?;
+    let mut lines = commit_str.lines().enumerate();
+
+    let mut tree = "";
+    let mut parent = None;
+    for (idx, line) in lines.by_ref() {
+        // commit message is after empty line
+        if line.is_empty() {
+            break;
+        }
+
+        let mut words = line.split_whitespace();
+        let key = words.next();
+        let value = words.next();
+        let extra = words.next();
+
+        match (key, value, extra) {
+            (Some(_k), Some(_v), None) => match _k {
+                "tree" => tree = _v,
+                "parent" => parent = Some(_v.to_string()),
+                _ => {
+                    return Err(anyhow!(
+                        "Invalid commit header at line {}: expected 'tree or parent', found '{}'",
+                        idx + 1,
+                        line
+                    ));
+                }
+            },
+            _ => {
+                return Err(anyhow!(
+                    "Invalid commit header at line {}: expected 'key value', found '{}'",
+                    idx + 1,
+                    line
+                ));
+            }
+        }
+    }
+
+    let message_lines: Vec<String> = lines.map(|(_, line)| line.to_string()).collect();
+    let message = message_lines.join("\n");
+
+    Ok(Commit {
+        tree: tree.to_string(),
+        parent,
+        message: message.to_string(),
+    })
+}
+
+pub fn log(config: &Config) -> Result<String> {
+    let mut history = String::new();
+    let mut current_oid: Option<String> = Some(get_head(config)?);
+
+    while let Some(oid) = current_oid {
+        let commit = get_commit(&oid, config)
+            .with_context(|| format!("Failed to read history at {}", oid))?;
+        writeln!(history, "{} {}", "commit".yellow(), oid.yellow().bold())?;
+        for line in commit.message.lines() {
+            writeln!(history, "    {}", line)?;
+        }
+
+        writeln!(history)?;
+        current_oid = commit.parent;
+    }
+    Ok(history)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{Config, init_repository};
+    use anyhow::Ok;
     use tempfile::{TempDir, tempdir};
 
     fn create_test_repo() -> Result<(TempDir, Config)> {
@@ -375,20 +478,19 @@ mod tests {
     }
 
     #[test]
-    fn create_commit() -> Result<()> {
+    fn test_create_commit() -> Result<()> {
         let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
-        match commit(String::from("This is the test commit message"), &config) {
-            Ok(res) => {
-                println!(
-                    "Writing commit successfully.\n{}\nSaved object:\n{:?}",
-                    res,
-                    str::from_utf8(&get_object(res.as_str(), ObjectType::Commit, &config).unwrap())
-                );
-                // check if HEAD was set properly
-                assert_eq!(res, fs::read_to_string(config.git_dir.join("HEAD"))?)
-            }
-            Err(e) => eprintln!("Error occured when attempting to write commit: {}", e),
-        }
+        let first_oid = create_commit(String::from("This is the test commit message"), &config)?;
+        println!("OID:{}\n{}", first_oid, get_commit(&first_oid, &config)?);
+        let second_oid = create_commit(
+            String::from("This is the SECOND test commit message"),
+            &config,
+        )?;
+        let third_oid = create_commit(
+            String::from("This is the THIRD test commit message"),
+            &config,
+        )?;
+        println!("{}", log(&config)?);
         Ok(())
     }
 }

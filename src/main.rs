@@ -5,7 +5,7 @@ mod data;
 use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
-use crate::cli::Config;
+use crate::{base::log, cli::Config};
 
 fn main() {
     let args = Args::parse();
@@ -26,7 +26,7 @@ fn main() {
         Commands::Add { files } => {
             println!("Adding files: {:?}", files);
         }
-        Commands::Commit { message } => match base::commit(message, &config) {
+        Commands::Commit { message } => match base::create_commit(message, &config) {
             Ok(_) => println!("Writing commit successfully."),
             Err(e) => eprintln!("Error occured when attempting to write commit: {}", e),
         },
@@ -46,6 +46,12 @@ fn main() {
                 Ok(_) => println!("Reading tree successfully."),
                 Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
             }
+        }
+        Commands::Log => {
+            match log(&config) {
+                Ok(history) => println!("{history}"),
+                Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
+            };
         }
     }
 }
