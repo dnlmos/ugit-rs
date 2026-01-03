@@ -6,8 +6,9 @@ use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
 use crate::{
-    base::{checkout, log},
+    base::{checkout, create_tag, log},
     cli::Config,
+    data::get_ref,
 };
 
 fn main() {
@@ -50,8 +51,18 @@ fn main() {
                 Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
             }
         }
-        Commands::Log => {
-            match log(&config) {
+        Commands::Log { oid } => {
+            let target_oid = match oid {
+                Some(id) => id,
+                None => match get_ref("HEAD", &config) {
+                    Ok(oid) => oid,
+                    Err(e) => {
+                        eprintln!("No OID provided and failed to fetch HEAD: {e}");
+                        return;
+                    }
+                },
+            };
+            match log(&target_oid, &config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
             };
@@ -61,6 +72,26 @@ fn main() {
                 Ok(_) => println!("Switched to {}", oid),
                 Err(e) => eprintln!("Error occured when attempting to checkout {}: {}", oid, e),
             };
+        }
+        Commands::Tag { name, oid } => {
+            let target_oid = match oid {
+                Some(id) => id,
+                None => match get_ref("HEAD", &config) {
+                    Ok(oid) => oid,
+                    Err(e) => {
+                        eprintln!("No OID provided and failed to fetch HEAD: {e}");
+                        return;
+                    }
+                },
+            };
+
+            match create_tag(&name, &target_oid, &config) {
+                Ok(_) => println!("Tag '{}' created successfully, oid '{}'", &name, target_oid),
+                Err(e) => eprintln!(
+                    "Error occured when attempting to create tag {}: {}",
+                    name, e
+                ),
+            }
         }
     }
 }

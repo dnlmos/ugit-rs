@@ -76,18 +76,28 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     Ok(obj[null_pos + 1..].to_owned())
 }
 
-pub fn set_head(oid: &str, config: &Config) -> Result<()> {
-    fs::write(config.git_dir.join("HEAD"), oid)?;
+pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
+    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
+    println!("UR {}", ref_path.display());
+    println!("cf {}", config.git_dir.display());
+
+    if let Some(parent) = ref_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to setup refs directory {}", parent.display()))?;
+    }
+
+    fs::write(&ref_path, oid)
+        .with_context(|| format!("Failed to write a file {}", ref_path.display()))?;
     Ok(())
 }
 
 /// # Returns
-/// `oid` of the commit object in HEAD file
-pub fn get_head(config: &Config) -> Result<String> {
-    let head_path = config.git_dir.join("HEAD");
+/// `oid` of the commit object in REF file
+pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
+    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
 
-    let content = fs::read_to_string(&head_path)
-        .with_context(|| format!("Could not read HEAD file at {}", head_path.display()))?;
+    let content = fs::read_to_string(&ref_path)
+        .with_context(|| format!("Could not read REF file at {}", ref_path.display()))?;
 
     Ok(content.trim().to_string())
 }

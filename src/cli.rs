@@ -53,10 +53,16 @@ pub enum Commands {
         #[arg(required = true)]
         tree_oid: String,
     },
-    Log,
+    Log {
+        oid: Option<String>,
+    },
     Checkout {
         #[arg(required = true)]
         oid: String,
+    },
+    Tag {
+        name: String,
+        oid: Option<String>,
     },
 }
 

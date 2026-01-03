@@ -1,4 +1,4 @@
-use crate::data::get_head;
+use crate::data::{ObjectType, get_object, get_ref, hash_object, update_ref};
 use anyhow::anyhow;
 use colored::*;
 use std::collections::{HashMap, HashSet};
@@ -10,7 +10,6 @@ use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
 
 use crate::cli::Config;
-use crate::data::{ObjectType, get_object, hash_object, set_head};
 
 pub struct Commit {
     pub tree: String,
@@ -278,7 +277,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    let head = get_head(config).context("Failed reading HEAD");
+    let head = get_ref("HEAD", config).context("Failed reading HEAD");
     if let Ok(head_oid) = head {
         writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
     }
@@ -286,7 +285,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    set_head(&commit_oid, config).context("Failed to set HEAD")?;
+    update_ref("HEAD", &commit_oid, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -343,9 +342,9 @@ pub fn get_commit(oid: &str, config: &Config) -> Result<Commit> {
     })
 }
 
-pub fn log(config: &Config) -> Result<String> {
+pub fn log(oid: &str, config: &Config) -> Result<String> {
     let mut history = String::new();
-    let mut current_oid: Option<String> = Some(get_head(config)?);
+    let mut current_oid: Option<String> = Some(get_ref(oid, config)?);
 
     while let Some(oid) = current_oid {
         let commit = get_commit(&oid, config)
@@ -367,7 +366,20 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
         get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
-    set_head(oid, config)
+    update_ref("HEAD", oid, config)
+}
+
+pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
+    update_ref(name, oid, config)?;
+    Ok(())
+}
+
+pub fn get_oid(name: &str, config: &Config) -> String {
+    // return name if cant retrieve oid
+    match get_ref(name, config) {
+        Ok(id) => id,
+        Err(_) => name.to_string(),
+    }
 }
 
 #[cfg(test)]
@@ -507,7 +519,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_head(&config)?, first_oid);
+        assert_eq!(get_ref("HEAD", &config)?, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -518,12 +530,43 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_head(&config)?, second_oid);
+        assert_eq!(get_ref("HEAD", &config)?, second_oid);
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
         );
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_tags() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
+
+        // first commit
+        create_test_file_structure(temp_dir.path())?;
+        let first_oid = create_commit("First message".to_string(), &config)?;
+        create_tag("first commit", &first_oid, &config)?;
+        let mut state_one = get_repository_contents(&config)?;
+        state_one.sort();
+
+        // add extra file and create second commit
+        std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
+        let second_oid = create_commit("Second message".to_string(), &config)?;
+        create_tag("second commit", &second_oid, &config)?;
+        let mut state_two = get_repository_contents(&config)?;
+        state_two.sort();
+
+        // checkout first commit and compare file system
+        checkout(&get_oid("first commit", &config), &config)?;
+        let mut current_entries = get_repository_contents(&config)?;
+        current_entries.sort();
+
+        // assert_eq!(get_ref("first_commit", &config)?, first_oid);
+        assert_eq!(
+            current_entries, state_one,
+            "FS should match first commit state"
+        );
         Ok(())
     }
 }
