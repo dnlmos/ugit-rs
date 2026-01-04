@@ -49,13 +49,16 @@ pub enum Commands {
         file_b: String,
     },
     WriteTree,
+    /// arg: oid or tag name
     ReadTree {
         #[arg(required = true)]
         tree_oid: String,
     },
+    /// arg: oid or tag name
     Log {
         oid: Option<String>,
     },
+    /// arg: oid or tag name
     Checkout {
         #[arg(required = true)]
         oid: String,

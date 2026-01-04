@@ -6,7 +6,7 @@ use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
 use crate::{
-    base::{checkout, create_tag, log},
+    base::{checkout, create_tag, get_oid, log},
     cli::Config,
     data::get_ref,
 };
@@ -46,7 +46,8 @@ fn main() {
         }
         Commands::ReadTree { tree_oid } => {
             println!("Reading tree");
-            match base::read_tree(&tree_oid, &config) {
+            let oid = get_oid(&tree_oid, &config);
+            match base::read_tree(&oid, &config) {
                 Ok(_) => println!("Reading tree successfully."),
                 Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
             }
@@ -62,12 +63,14 @@ fn main() {
                     }
                 },
             };
-            match log(&target_oid, &config) {
+            let oid = get_oid(&target_oid, &config);
+            match log(&oid, &config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
             };
         }
         Commands::Checkout { oid } => {
+            let oid = get_oid(&oid, &config);
             match checkout(&oid, &config) {
                 Ok(_) => println!("Switched to {}", oid),
                 Err(e) => eprintln!("Error occured when attempting to checkout {}: {}", oid, e),
