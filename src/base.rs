@@ -4,7 +4,7 @@ use colored::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
-use std::path::{Path, PathBuf};
+use std::path::{self, Path, PathBuf};
 
 use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
@@ -374,11 +374,28 @@ pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Resolve a "name" to an OID. A name can either be a ref (in which case this
+/// function will return the OID that the ref points to) or an OID
+/// (in which case get_oid will just return that same OID).
 pub fn get_oid(name: &str, config: &Config) -> String {
-    // return name if cant retrieve oid
-    match get_ref(name, config) {
-        Ok(id) => id,
-        Err(_) => name.to_string(),
+    let refs_to_try = vec![
+        name.to_string(),
+        format!("refs/{}", name),
+        format!("refs/tags/{}", name),
+        format!("refs/heads/{}", name),
+    ];
+    let mut found_id = None;
+
+    for ref_ in refs_to_try {
+        if let Ok(id) = get_ref(&ref_, config) {
+            found_id = Some(id);
+            break;
+        }
+    }
+
+    match found_id {
+        Some(id) => id,
+        None => name.to_string(),
     }
 }
 
