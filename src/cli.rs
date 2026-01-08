@@ -67,6 +67,7 @@ pub enum Commands {
         name: String,
         oid: Option<String>,
     },
+    K,
 }
 
 pub fn init_repository(config: &Config) -> Result<(), Error> {

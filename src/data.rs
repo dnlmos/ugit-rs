@@ -1,6 +1,11 @@
 use anyhow::{Context, Error, Result};
 use sha1::{Digest, Sha1};
-use std::{fmt, fs};
+use std::{
+    fmt, fs,
+    path::{Path, PathBuf},
+    vec,
+};
+use walkdir::WalkDir;
 
 use crate::cli::Config;
 
@@ -78,8 +83,6 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 
 pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
     let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
-    println!("UR {}", ref_path.display());
-    println!("cf {}", config.git_dir.display());
 
     if let Some(parent) = ref_path.parent() {
         fs::create_dir_all(parent)
@@ -100,6 +103,32 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
         .with_context(|| format!("Could not read REF file at {}", ref_path.display()))?;
 
     Ok(content.trim().to_string())
+}
+
+pub fn iter_refs(config: &Config) -> Result<()> {
+    let mut refs: Vec<String> = vec![];
+    let ref_path = config.git_dir.join("refs");
+
+    for entry in WalkDir::new(ref_path)
+        .contents_first(true)
+        .into_iter()
+        .filter_map(Result::ok)
+        .filter(|e| e.path().is_file())
+    {
+        // let filename = &entry.file_name();
+        // .strip_prefix(&config.git_dir)
+        // .context("Error occured while trying to create relative path {}")?
+        // .to_str()
+        // .context("Not valid unicode")?
+        // .to_string();
+
+        // println!("{}", filename);
+        // push relative path of ref_file (relative to git_dir path)
+        // refs.push(filename);
+    }
+
+    // println!("{:?}", refs);
+    Ok(())
 }
 
 pub enum ObjectType {

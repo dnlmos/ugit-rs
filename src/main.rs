@@ -96,5 +96,8 @@ fn main() {
                 ),
             }
         }
+        Commands::K => {
+            data::iter_refs(&config);
+        }
     }
 }

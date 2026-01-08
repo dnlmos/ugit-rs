@@ -403,6 +403,7 @@ pub fn get_oid(name: &str, config: &Config) -> String {
 mod tests {
     use super::*;
     use crate::cli::{Config, init_repository};
+    use crate::data::iter_refs;
     use anyhow::Ok;
     use tempfile::{TempDir, tempdir};
 
@@ -558,18 +559,18 @@ mod tests {
 
     #[test]
     fn test_tags() -> Result<()> {
-        let (temp_dir, config) = create_test_repo().expect("Failed to create test repository");
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
 
         // first commit
         create_test_file_structure(temp_dir.path())?;
-        let first_oid = create_commit("First message".to_string(), &config)?;
+        let first_oid = create_commit("first message".to_string(), &config)?;
         create_tag("first commit", &first_oid, &config)?;
         let mut state_one = get_repository_contents(&config)?;
         state_one.sort();
 
         // add extra file and create second commit
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
-        let second_oid = create_commit("Second message".to_string(), &config)?;
+        let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
         let mut state_two = get_repository_contents(&config)?;
         state_two.sort();
@@ -579,11 +580,28 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        // assert_eq!(get_ref("first_commit", &config)?, first_oid);
+        assert_eq!(get_ref("first_commit", &config)?, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
         );
+        Ok(())
+    }
+
+    #[test]
+    fn test_k() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
+
+        // first commit
+        create_test_file_structure(temp_dir.path())?;
+        let first_oid = create_commit("first message".to_string(), &config)?;
+        create_tag("first commit", &first_oid, &config)?;
+        // add extra file and create second commit
+        std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
+        let second_oid = create_commit("second message".to_string(), &config)?;
+        create_tag("second commit", &second_oid, &config)?;
+
+        iter_refs(&config)?;
         Ok(())
     }
 }
