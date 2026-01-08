@@ -1,11 +1,7 @@
 use anyhow::{Context, Error, Result};
+use colored::*;
 use sha1::{Digest, Sha1};
-use std::{
-    fmt, fs,
-    path::{Path, PathBuf},
-    vec,
-};
-use walkdir::WalkDir;
+use std::{fmt, fs};
 
 use crate::cli::Config;
 
@@ -81,6 +77,16 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     Ok(obj[null_pos + 1..].to_owned())
 }
 
+/// Creates or updates a tag reference by writing the given `oid`
+/// to `.ugit/refs/tags/<ref_>`. Automatically creates parent directories.
+///
+/// # Arguments
+/// * `ref_` - Tag name
+/// * `oid` - Object ID to point the tag at
+/// * `config` - Repository configuration
+///
+/// # Errors
+/// Returns an error if the directories cannot be created or the file cannot be written.
 pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
     let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
 
@@ -94,8 +100,17 @@ pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
+/// Reads the OID stored in `.ugit/refs/tags/<ref_>`.
+///
+/// # Arguments
+/// * `ref_` - Tag name
+/// * `config` - Repository configuration
+///
 /// # Returns
-/// `oid` of the commit object in REF file
+/// The commit OID the tag points to, as a trimmed string.
+///
+/// # Errors
+/// Returns an error if the file does not exist or cannot be read.
 pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
     let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
 
@@ -105,29 +120,23 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
     Ok(content.trim().to_string())
 }
 
+/// iterate through all refs in refs/tags/
 pub fn iter_refs(config: &Config) -> Result<()> {
-    let mut refs: Vec<String> = vec![];
-    let ref_path = config.git_dir.join("refs");
+    let ref_path = config.git_dir.join("refs").join("tags");
 
-    for entry in WalkDir::new(ref_path)
-        .contents_first(true)
-        .into_iter()
-        .filter_map(Result::ok)
-        .filter(|e| e.path().is_file())
-    {
-        // let filename = &entry.file_name();
-        // .strip_prefix(&config.git_dir)
-        // .context("Error occured while trying to create relative path {}")?
-        // .to_str()
-        // .context("Not valid unicode")?
-        // .to_string();
-
-        // println!("{}", filename);
-        // push relative path of ref_file (relative to git_dir path)
-        // refs.push(filename);
+    let mut entries = vec![];
+    for entry in fs::read_dir(ref_path)? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            entries.push(entry.file_name().to_string_lossy().into_owned())
+        }
     }
 
-    // println!("{:?}", refs);
+    for entry in entries {
+        let oid = get_ref(&entry, config)?;
+        println!("{} | {}", entry.yellow().bold(), oid);
+    }
+
     Ok(())
 }
 

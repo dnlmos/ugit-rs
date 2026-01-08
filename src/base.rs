@@ -4,7 +4,8 @@ use colored::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
-use std::path::{self, Path, PathBuf};
+use std::path::{Path, PathBuf};
+use ugit_rs::utils::is_valid_sha1;
 
 use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
@@ -342,9 +343,12 @@ pub fn get_commit(oid: &str, config: &Config) -> Result<Commit> {
     })
 }
 
+/// Returns the commit history starting from the given revision.
+///
+/// `oid` may be an object ID or a resolvable name (tag).
 pub fn log(oid: &str, config: &Config) -> Result<String> {
     let mut history = String::new();
-    let mut current_oid: Option<String> = Some(get_ref(oid, config)?);
+    let mut current_oid: Option<String> = Some(resolve_oid(oid, config)?);
 
     while let Some(oid) = current_oid {
         let commit = get_commit(&oid, config)
@@ -361,11 +365,20 @@ pub fn log(oid: &str, config: &Config) -> Result<String> {
     Ok(history)
 }
 
+pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
+    if is_valid_sha1(oid) {
+        Ok(String::from(oid))
+    } else {
+        Ok(get_ref(oid, config)?)
+    }
+}
+
 pub fn checkout(oid: &str, config: &Config) -> Result<()> {
     let commit =
         get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
+
     update_ref("HEAD", oid, config)
 }
 
@@ -580,7 +593,6 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        // assert_eq!(get_ref("first_commit", &config)?, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -600,8 +612,9 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
-
+        println!("{}", log("first commit", &config)?);
         iter_refs(&config)?;
+
         Ok(())
     }
 }
