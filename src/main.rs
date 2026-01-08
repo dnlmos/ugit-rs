@@ -55,10 +55,10 @@ fn main() {
         Commands::Log { oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("HEAD", &config) {
+                None => match get_ref("@", &config) {
                     Ok(oid) => oid,
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD: {e}");
+                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;
                     }
                 },
@@ -79,10 +79,10 @@ fn main() {
         Commands::Tag { name, oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("HEAD", &config) {
+                None => match get_ref("@", &config) {
                     Ok(oid) => oid,
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD: {e}");
+                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;
                     }
                 },
@@ -97,7 +97,7 @@ fn main() {
             }
         }
         Commands::K => {
-            data::iter_refs(&config);
+            let _ = data::iter_refs(&config);
         }
     }
 }

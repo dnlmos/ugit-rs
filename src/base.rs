@@ -278,7 +278,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    let head = get_ref("HEAD", config).context("Failed reading HEAD");
+    let head = get_ref("@", config).context("Failed reading HEAD");
     if let Ok(head_oid) = head {
         writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
     }
@@ -286,7 +286,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    update_ref("HEAD", &commit_oid, config).context("Failed to set HEAD")?;
+    update_ref("@", &commit_oid, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -379,7 +379,7 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
 
-    update_ref("HEAD", oid, config)
+    update_ref("@", oid, config)
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
@@ -550,7 +550,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("HEAD", &config)?, first_oid);
+        assert_eq!(get_ref("@", &config)?, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -561,7 +561,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("HEAD", &config)?, second_oid);
+        assert_eq!(get_ref("@", &config)?, second_oid);
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
@@ -612,7 +612,7 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
-        println!("{}", log("first commit", &config)?);
+        println!("{}", log("second commit", &config)?);
         iter_refs(&config)?;
 
         Ok(())
