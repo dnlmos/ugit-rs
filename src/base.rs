@@ -1,9 +1,14 @@
-use crate::data::{ObjectType, get_object, get_ref, hash_object, update_ref};
+use crate::data::{ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
 use anyhow::anyhow;
+use clap::builder::Str;
 use colored::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
+use std::hash::Hash;
+use std::io::PipeReader;
+use std::os::unix::process::parent_id;
+use std::os::unix::raw::pid_t;
 use std::path::{Path, PathBuf};
 use ugit_rs::utils::is_valid_sha1;
 
@@ -387,6 +392,28 @@ pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
+pub fn k(config: &Config) -> Result<()> {
+    let oids: HashSet<String> = HashSet::from_iter(iter_refs(config).iter().flat_map(|entry| {
+        entry.iter().map(|x| {
+            println!("{} {}", x.0.bold().yellow(), x.1);
+            x.1.clone()
+        })
+    }));
+
+    let commits = iter_comits_and_parents(oids, config)?;
+
+    for oid in &commits {
+        let commit = get_commit(oid, config)?;
+        println!("{}", oid);
+
+        if let Some(parent) = commit.parent {
+            println!("Parent {}", parent.yellow());
+        }
+    }
+
+    Ok(())
+}
+
 /// Resolve a "name" to an OID. A name can either be a ref (in which case this
 /// function will return the OID that the ref points to) or an OID
 /// (in which case get_oid will just return that same OID).
@@ -410,6 +437,28 @@ pub fn get_oid(name: &str, config: &Config) -> String {
         Some(id) => id,
         None => name.to_string(),
     }
+}
+
+pub fn iter_comits_and_parents(oids: HashSet<String>, config: &Config) -> Result<HashSet<String>> {
+    let mut oids: Vec<String> = oids.into_iter().collect();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    while !oids.is_empty() {
+        let oid_ = oids.pop();
+        // println!("{oids:?}");
+        if let Some(oid) = oid_ {
+            // oids.push(oid.clone()); // ???
+            if !visited.contains(&oid) {
+                visited.insert(oid.to_owned());
+                let commit = get_commit(&oid, config)?.parent;
+                if let Some(parent) = commit {
+                    oids.push(parent);
+                }
+            }
+        }
+    }
+
+    Ok(visited)
 }
 
 #[cfg(test)]
@@ -612,8 +661,7 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
-        println!("{}", log("second commit", &config)?);
-        iter_refs(&config)?;
+        k(&config)?;
 
         Ok(())
     }

@@ -1,7 +1,11 @@
 use anyhow::{Context, Error, Result};
 use colored::*;
 use sha1::{Digest, Sha1};
-use std::{fmt, fs};
+use std::{
+    collections::{HashSet, btree_map::Entry},
+    fmt, fs,
+    io::empty,
+};
 
 use crate::cli::Config;
 
@@ -121,23 +125,20 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
 }
 
 /// iterate through all refs in refs/tags/
-pub fn iter_refs(config: &Config) -> Result<()> {
+pub fn iter_refs(config: &Config) -> Result<Vec<(String, String)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
 
-    let mut entries = vec![];
+    // ref name, get_ref
+    let mut entries: Vec<(String, String)> = Vec::new();
     for entry in fs::read_dir(ref_path)? {
         let entry = entry?;
         if entry.path().is_file() {
-            entries.push(entry.file_name().to_string_lossy().into_owned())
+            let filename = entry.file_name().to_string_lossy().to_string();
+            entries.push((filename.clone(), get_ref(&filename, config)?));
         }
     }
 
-    for entry in entries {
-        let oid = get_ref(&entry, config)?;
-        println!("{} | {}", entry.yellow().bold(), oid);
-    }
-
-    Ok(())
+    Ok(entries)
 }
 
 pub enum ObjectType {

@@ -6,7 +6,7 @@ use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
 use crate::{
-    base::{checkout, create_tag, get_oid, log},
+    base::{checkout, create_tag, get_oid, k, log},
     cli::Config,
     data::get_ref,
 };
@@ -97,7 +97,7 @@ fn main() {
             }
         }
         Commands::K => {
-            let _ = data::iter_refs(&config);
+            let _ = k(&config);
         }
     }
 }
