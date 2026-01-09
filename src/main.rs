@@ -6,8 +6,9 @@ use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
 use crate::{
-    base::{checkout, log},
+    base::{checkout, create_tag, get_oid, k, log},
     cli::Config,
+    data::get_ref,
 };
 
 fn main() {
@@ -45,22 +46,58 @@ fn main() {
         }
         Commands::ReadTree { tree_oid } => {
             println!("Reading tree");
-            match base::read_tree(&tree_oid, &config) {
+            let oid = get_oid(&tree_oid, &config);
+            match base::read_tree(&oid, &config) {
                 Ok(_) => println!("Reading tree successfully."),
                 Err(e) => eprintln!("Error occured when attempting to read tree: {}", e),
             }
         }
-        Commands::Log => {
-            match log(&config) {
+        Commands::Log { oid } => {
+            let target_oid = match oid {
+                Some(id) => id,
+                None => match get_ref("@", &config) {
+                    Ok(oid) => oid,
+                    Err(e) => {
+                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        return;
+                    }
+                },
+            };
+            let oid = get_oid(&target_oid, &config);
+            match log(&oid, &config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
             };
         }
         Commands::Checkout { oid } => {
+            let oid = get_oid(&oid, &config);
             match checkout(&oid, &config) {
                 Ok(_) => println!("Switched to {}", oid),
                 Err(e) => eprintln!("Error occured when attempting to checkout {}: {}", oid, e),
             };
+        }
+        Commands::Tag { name, oid } => {
+            let target_oid = match oid {
+                Some(id) => id,
+                None => match get_ref("@", &config) {
+                    Ok(oid) => oid,
+                    Err(e) => {
+                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        return;
+                    }
+                },
+            };
+
+            match create_tag(&name, &target_oid, &config) {
+                Ok(_) => println!("Tag '{}' created successfully, oid '{}'", &name, target_oid),
+                Err(e) => eprintln!(
+                    "Error occured when attempting to create tag {}: {}",
+                    name, e
+                ),
+            }
+        }
+        Commands::K => {
+            let _ = k(&config);
         }
     }
 }

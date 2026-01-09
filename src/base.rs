@@ -1,16 +1,21 @@
-use crate::data::get_head;
+use crate::data::{ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
 use anyhow::anyhow;
+use clap::builder::Str;
 use colored::*;
 use std::collections::{HashMap, HashSet};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
+use std::hash::Hash;
+use std::io::PipeReader;
+use std::os::unix::process::parent_id;
+use std::os::unix::raw::pid_t;
 use std::path::{Path, PathBuf};
+use ugit_rs::utils::is_valid_sha1;
 
 use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
 
 use crate::cli::Config;
-use crate::data::{ObjectType, get_object, hash_object, set_head};
 
 pub struct Commit {
     pub tree: String,
@@ -278,7 +283,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    let head = get_head(config).context("Failed reading HEAD");
+    let head = get_ref("@", config).context("Failed reading HEAD");
     if let Ok(head_oid) = head {
         writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
     }
@@ -286,7 +291,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    set_head(&commit_oid, config).context("Failed to set HEAD")?;
+    update_ref("@", &commit_oid, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -343,9 +348,12 @@ pub fn get_commit(oid: &str, config: &Config) -> Result<Commit> {
     })
 }
 
-pub fn log(config: &Config) -> Result<String> {
+/// Returns the commit history starting from the given revision.
+///
+/// `oid` may be an object ID or a resolvable name (tag).
+pub fn log(oid: &str, config: &Config) -> Result<String> {
     let mut history = String::new();
-    let mut current_oid: Option<String> = Some(get_head(config)?);
+    let mut current_oid: Option<String> = Some(resolve_oid(oid, config)?);
 
     while let Some(oid) = current_oid {
         let commit = get_commit(&oid, config)
@@ -362,18 +370,102 @@ pub fn log(config: &Config) -> Result<String> {
     Ok(history)
 }
 
+pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
+    if is_valid_sha1(oid) {
+        Ok(String::from(oid))
+    } else {
+        Ok(get_ref(oid, config)?)
+    }
+}
+
 pub fn checkout(oid: &str, config: &Config) -> Result<()> {
     let commit =
         get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
-    set_head(oid, config)
+
+    update_ref("@", oid, config)
+}
+
+pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
+    update_ref(name, oid, config)?;
+    Ok(())
+}
+
+pub fn k(config: &Config) -> Result<()> {
+    let oids: HashSet<String> = HashSet::from_iter(iter_refs(config).iter().flat_map(|entry| {
+        entry.iter().map(|x| {
+            println!("{} {}", x.0.bold().yellow(), x.1);
+            x.1.clone()
+        })
+    }));
+
+    let commits = iter_comits_and_parents(oids, config)?;
+
+    for oid in &commits {
+        let commit = get_commit(oid, config)?;
+        println!("{}", oid);
+
+        if let Some(parent) = commit.parent {
+            println!("Parent {}", parent.yellow());
+        }
+    }
+
+    Ok(())
+}
+
+/// Resolve a "name" to an OID. A name can either be a ref (in which case this
+/// function will return the OID that the ref points to) or an OID
+/// (in which case get_oid will just return that same OID).
+pub fn get_oid(name: &str, config: &Config) -> String {
+    let refs_to_try = vec![
+        name.to_string(),
+        format!("refs/{}", name),
+        format!("refs/tags/{}", name),
+        format!("refs/heads/{}", name),
+    ];
+    let mut found_id = None;
+
+    for ref_ in refs_to_try {
+        if let Ok(id) = get_ref(&ref_, config) {
+            found_id = Some(id);
+            break;
+        }
+    }
+
+    match found_id {
+        Some(id) => id,
+        None => name.to_string(),
+    }
+}
+
+pub fn iter_comits_and_parents(oids: HashSet<String>, config: &Config) -> Result<HashSet<String>> {
+    let mut oids: Vec<String> = oids.into_iter().collect();
+    let mut visited: HashSet<String> = HashSet::new();
+
+    while !oids.is_empty() {
+        let oid_ = oids.pop();
+        // println!("{oids:?}");
+        if let Some(oid) = oid_ {
+            // oids.push(oid.clone()); // ???
+            if !visited.contains(&oid) {
+                visited.insert(oid.to_owned());
+                let commit = get_commit(&oid, config)?.parent;
+                if let Some(parent) = commit {
+                    oids.push(parent);
+                }
+            }
+        }
+    }
+
+    Ok(visited)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::cli::{Config, init_repository};
+    use crate::data::iter_refs;
     use anyhow::Ok;
     use tempfile::{TempDir, tempdir};
 
@@ -507,7 +599,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_head(&config)?, first_oid);
+        assert_eq!(get_ref("@", &config)?, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -518,11 +610,58 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_head(&config)?, second_oid);
+        assert_eq!(get_ref("@", &config)?, second_oid);
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
         );
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_tags() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
+
+        // first commit
+        create_test_file_structure(temp_dir.path())?;
+        let first_oid = create_commit("first message".to_string(), &config)?;
+        create_tag("first commit", &first_oid, &config)?;
+        let mut state_one = get_repository_contents(&config)?;
+        state_one.sort();
+
+        // add extra file and create second commit
+        std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
+        let second_oid = create_commit("second message".to_string(), &config)?;
+        create_tag("second commit", &second_oid, &config)?;
+        let mut state_two = get_repository_contents(&config)?;
+        state_two.sort();
+
+        // checkout first commit and compare file system
+        checkout(&get_oid("first commit", &config), &config)?;
+        let mut current_entries = get_repository_contents(&config)?;
+        current_entries.sort();
+
+        assert_eq!(
+            current_entries, state_one,
+            "FS should match first commit state"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn test_k() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
+
+        // first commit
+        create_test_file_structure(temp_dir.path())?;
+        let first_oid = create_commit("first message".to_string(), &config)?;
+        create_tag("first commit", &first_oid, &config)?;
+        // add extra file and create second commit
+        std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
+        let second_oid = create_commit("second message".to_string(), &config)?;
+        create_tag("second commit", &second_oid, &config)?;
+        k(&config)?;
 
         Ok(())
     }

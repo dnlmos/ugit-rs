@@ -1,6 +1,11 @@
 use anyhow::{Context, Error, Result};
+use colored::*;
 use sha1::{Digest, Sha1};
-use std::{fmt, fs};
+use std::{
+    collections::{HashSet, btree_map::Entry},
+    fmt, fs,
+    io::empty,
+};
 
 use crate::cli::Config;
 
@@ -76,20 +81,64 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     Ok(obj[null_pos + 1..].to_owned())
 }
 
-pub fn set_head(oid: &str, config: &Config) -> Result<()> {
-    fs::write(config.git_dir.join("HEAD"), oid)?;
+/// Creates or updates a tag reference by writing the given `oid`
+/// to `.ugit/refs/tags/<ref_>`. Automatically creates parent directories.
+///
+/// # Arguments
+/// * `ref_` - Tag name
+/// * `oid` - Object ID to point the tag at
+/// * `config` - Repository configuration
+///
+/// # Errors
+/// Returns an error if the directories cannot be created or the file cannot be written.
+pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
+    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
+
+    if let Some(parent) = ref_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to setup refs directory {}", parent.display()))?;
+    }
+
+    fs::write(&ref_path, oid)
+        .with_context(|| format!("Failed to write a file {}", ref_path.display()))?;
     Ok(())
 }
 
+/// Reads the OID stored in `.ugit/refs/tags/<ref_>`.
+///
+/// # Arguments
+/// * `ref_` - Tag name
+/// * `config` - Repository configuration
+///
 /// # Returns
-/// `oid` of the commit object in HEAD file
-pub fn get_head(config: &Config) -> Result<String> {
-    let head_path = config.git_dir.join("HEAD");
+/// The commit OID the tag points to, as a trimmed string.
+///
+/// # Errors
+/// Returns an error if the file does not exist or cannot be read.
+pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
+    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
 
-    let content = fs::read_to_string(&head_path)
-        .with_context(|| format!("Could not read HEAD file at {}", head_path.display()))?;
+    let content = fs::read_to_string(&ref_path)
+        .with_context(|| format!("Could not read REF file at {}", ref_path.display()))?;
 
     Ok(content.trim().to_string())
+}
+
+/// iterate through all refs in refs/tags/
+pub fn iter_refs(config: &Config) -> Result<Vec<(String, String)>> {
+    let ref_path = config.git_dir.join("refs").join("tags");
+
+    // ref name, get_ref
+    let mut entries: Vec<(String, String)> = Vec::new();
+    for entry in fs::read_dir(ref_path)? {
+        let entry = entry?;
+        if entry.path().is_file() {
+            let filename = entry.file_name().to_string_lossy().to_string();
+            entries.push((filename.clone(), get_ref(&filename, config)?));
+        }
+    }
+
+    Ok(entries)
 }
 
 pub enum ObjectType {

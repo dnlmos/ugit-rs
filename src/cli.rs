@@ -49,15 +49,25 @@ pub enum Commands {
         file_b: String,
     },
     WriteTree,
+    /// arg: oid or tag name
     ReadTree {
         #[arg(required = true)]
         tree_oid: String,
     },
-    Log,
+    /// arg: oid or tag name
+    Log {
+        oid: Option<String>,
+    },
+    /// arg: oid or tag name
     Checkout {
         #[arg(required = true)]
         oid: String,
     },
+    Tag {
+        name: String,
+        oid: Option<String>,
+    },
+    K,
 }
 
 pub fn init_repository(config: &Config) -> Result<(), Error> {
