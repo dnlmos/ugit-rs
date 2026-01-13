@@ -1,14 +1,9 @@
 use crate::data::{ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
 use anyhow::anyhow;
-use clap::builder::Str;
 use colored::*;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
-use std::hash::Hash;
-use std::io::PipeReader;
-use std::os::unix::process::parent_id;
-use std::os::unix::raw::pid_t;
 use std::path::{Path, PathBuf};
 use ugit_rs::utils::is_valid_sha1;
 
@@ -392,26 +387,53 @@ pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
-pub fn k(config: &Config) -> Result<()> {
-    let oids: HashSet<String> = HashSet::from_iter(iter_refs(config).iter().flat_map(|entry| {
-        entry.iter().map(|x| {
-            println!("{} {}", x.0.bold().yellow(), x.1);
-            x.1.clone()
-        })
-    }));
+// Return formatted output of git history
+pub fn k(config: &Config) -> Result<String> {
+    let mut output = String::new();
+    let mut refs_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut oids = BTreeSet::new();
 
-    let commits = iter_comits_and_parents(oids, config)?;
-
-    for oid in &commits {
-        let commit = get_commit(oid, config)?;
-        println!("{}", oid);
-
-        if let Some(parent) = commit.parent {
-            println!("Parent {}", parent.yellow());
+    for entry in iter_refs(config).iter() {
+        for x in entry.iter() {
+            refs_map.entry(x.1.clone()).or_default().push(x.0.clone());
+            oids.insert(x.1.clone());
         }
     }
 
-    Ok(())
+    let commits = iter_comits_and_parents(oids, config)?;
+
+    output.push('\n');
+
+    for (i, oid) in commits.iter().enumerate() {
+        let commit = get_commit(oid, config)?;
+        let short_oid = &oid[..10.min(oid.len())];
+
+        let is_last = i == commits.len() - 1;
+        let prefix = if is_last { "└─" } else { "├─" };
+        let continuation = if is_last { "  " } else { "│ " };
+
+        // Show the commit
+        output.push_str(&format!("{} ● {}", prefix, short_oid.yellow()));
+
+        // Show refs
+        if let Some(refs) = refs_map.get(oid) {
+            output.push_str(&format!(
+                " ← {} | {}",
+                refs.join(", "),
+                commit.message.red()
+            ));
+        }
+
+        output.push('\n');
+
+        // Add spacing for next commit
+        if !is_last {
+            output.push_str(&format!("{}   \n", continuation));
+        }
+    }
+
+    output.push('\n');
+    Ok(output)
 }
 
 /// Resolve a "name" to an OID. A name can either be a ref (in which case this
@@ -439,12 +461,15 @@ pub fn get_oid(name: &str, config: &Config) -> String {
     }
 }
 
-pub fn iter_comits_and_parents(oids: HashSet<String>, config: &Config) -> Result<HashSet<String>> {
-    let mut oids: Vec<String> = oids.into_iter().collect();
-    let mut visited: HashSet<String> = HashSet::new();
+pub fn iter_comits_and_parents(
+    oids: BTreeSet<String>,
+    config: &Config,
+) -> Result<BTreeSet<String>> {
+    let mut oids: VecDeque<String> = oids.into_iter().collect();
+    let mut visited: BTreeSet<String> = BTreeSet::new();
 
     while !oids.is_empty() {
-        let oid_ = oids.pop();
+        let oid_ = oids.pop_front();
         // println!("{oids:?}");
         if let Some(oid) = oid_ {
             // oids.push(oid.clone()); // ???
@@ -452,7 +477,7 @@ pub fn iter_comits_and_parents(oids: HashSet<String>, config: &Config) -> Result
                 visited.insert(oid.to_owned());
                 let commit = get_commit(&oid, config)?.parent;
                 if let Some(parent) = commit {
-                    oids.push(parent);
+                    oids.push_front(parent);
                 }
             }
         }
@@ -465,7 +490,6 @@ pub fn iter_comits_and_parents(oids: HashSet<String>, config: &Config) -> Result
 mod tests {
     use super::*;
     use crate::cli::{Config, init_repository};
-    use crate::data::iter_refs;
     use anyhow::Ok;
     use tempfile::{TempDir, tempdir};
 
@@ -661,7 +685,7 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
-        k(&config)?;
+        println!("{}", k(&config)?);
 
         Ok(())
     }
