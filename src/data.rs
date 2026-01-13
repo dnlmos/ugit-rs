@@ -1,11 +1,6 @@
-use anyhow::{Context, Error, Result};
-use colored::*;
+use anyhow::{Context, Error, Result, anyhow};
 use sha1::{Digest, Sha1};
-use std::{
-    collections::{HashSet, btree_map::Entry},
-    fmt, fs,
-    io::empty,
-};
+use std::{fmt, fs, path::Path};
 
 use crate::cli::Config;
 
@@ -91,8 +86,8 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 ///
 /// # Errors
 /// Returns an error if the directories cannot be created or the file cannot be written.
-pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
-    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
+pub fn update_ref(ref_: &Path, oid: &str, config: &Config) -> Result<()> {
+    let ref_path = config.git_dir.join(ref_);
 
     if let Some(parent) = ref_path.parent() {
         fs::create_dir_all(parent)
@@ -104,24 +99,58 @@ pub fn update_ref(ref_: &str, oid: &str, config: &Config) -> Result<()> {
     Ok(())
 }
 
-/// Reads the OID stored in `.ugit/refs/tags/<ref_>`.
+/// Resolves a Git reference and returns the OID it points to.
+///
+/// This function attempts to read the reference from multiple locations,
+/// in the same order Git commonly resolves refs:
+///
+/// - `<git_dir>/<ref_>`
+/// - `<git_dir>/refs/<ref_>`
+/// - `<git_dir>/refs/tags/<ref_>`
+/// - `<git_dir>/refs/heads/<ref_>`
 ///
 /// # Arguments
-/// * `ref_` - Tag name
+/// * `ref_` - The reference name (e.g. `HEAD` (@), `main`)
 /// * `config` - Repository configuration
 ///
 /// # Returns
-/// The commit OID the tag points to, as a trimmed string.
+/// The object ID (OID) the reference points to, as a trimmed string.
 ///
 /// # Errors
-/// Returns an error if the file does not exist or cannot be read.
+/// Returns an error if the reference cannot be found in any of the attempted
+/// locations or if a reference file exists but cannot be read.
 pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
-    let ref_path = config.git_dir.join("refs").join("tags").join(ref_);
+    let git_dir = &config.git_dir;
 
-    let content = fs::read_to_string(&ref_path)
-        .with_context(|| format!("Could not read REF file at {}", ref_path.display()))?;
+    let refs_to_try = vec![
+        git_dir.join(ref_),
+        git_dir.join("refs").join(ref_),
+        git_dir.join("refs").join("tags").join(ref_),
+        git_dir.join("refs").join("heads").join(ref_),
+    ];
 
-    Ok(content.trim().to_string())
+    let mut last_err = None;
+
+    for path in &refs_to_try {
+        match fs::read_to_string(path) {
+            Ok(contents) => return Ok(contents.trim().to_string()),
+            Err(e) => {
+                last_err =
+                    Some(anyhow!(e).context(format!("Failed to read ref at {}", path.display())));
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "Ref '{}' not found. Tried:\n{}",
+        ref_,
+        refs_to_try
+            .iter()
+            .map(|p| format!("  {}", p.display()))
+            .collect::<Vec<_>>()
+            .join("\n")
+    )
+    .context(last_err.unwrap_or_else(|| anyhow!("No ref paths attempted"))))
 }
 
 /// iterate through all refs in refs/tags/
@@ -148,7 +177,7 @@ pub enum ObjectType {
 }
 
 impl ObjectType {
-    pub fn as_bytes(&self) -> &[u8] {
+    pub fn _as_bytes(&self) -> &[u8] {
         match self {
             ObjectType::Blob => "blob".as_bytes(),
             ObjectType::Tree => "tree".as_bytes(),

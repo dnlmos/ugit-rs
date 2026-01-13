@@ -286,7 +286,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    update_ref("@", &commit_oid, config).context("Failed to set HEAD")?;
+    update_ref(Path::new("refs/heads/@"), &commit_oid, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -379,11 +379,11 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
 
-    update_ref("@", oid, config)
+    update_ref(Path::new("refs/heads/@"), oid, config)
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(name, oid, config)?;
+    update_ref(Path::new(&format!("refs/tags/{name}")), oid, config)?;
     Ok(())
 }
 
@@ -440,24 +440,9 @@ pub fn k(config: &Config) -> Result<String> {
 /// function will return the OID that the ref points to) or an OID
 /// (in which case get_oid will just return that same OID).
 pub fn get_oid(name: &str, config: &Config) -> String {
-    let refs_to_try = vec![
-        name.to_string(),
-        format!("refs/{}", name),
-        format!("refs/tags/{}", name),
-        format!("refs/heads/{}", name),
-    ];
-    let mut found_id = None;
-
-    for ref_ in refs_to_try {
-        if let Ok(id) = get_ref(&ref_, config) {
-            found_id = Some(id);
-            break;
-        }
-    }
-
-    match found_id {
-        Some(id) => id,
-        None => name.to_string(),
+    match get_ref(name, config) {
+        Ok(id) => id,
+        _ => name.to_string(),
     }
 }
 
@@ -658,6 +643,18 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
+
+        // check if tag is created and contains correct oid
+        assert_eq!(
+            fs::read_to_string(config.git_dir.join("refs/tags/second commit"))?,
+            second_oid
+        );
+        // check if head has the correct oid as "second commit"
+        assert_eq!(
+            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
+            second_oid
+        );
+
         let mut state_two = get_repository_contents(&config)?;
         state_two.sort();
 
@@ -665,6 +662,17 @@ mod tests {
         checkout(&get_oid("first commit", &config), &config)?;
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
+
+        // check if head has the correct oid as "second commit"
+        assert_eq!(
+            fs::read_to_string(config.git_dir.join("refs/tags/first commit"))?,
+            first_oid
+        );
+        // check if tag is created and contains correct oid
+        assert_eq!(
+            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
+            first_oid
+        );
 
         assert_eq!(
             current_entries, state_one,
