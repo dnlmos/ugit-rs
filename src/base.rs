@@ -441,7 +441,7 @@ pub fn k(config: &Config) -> Result<String> {
 /// (in which case get_oid will just return that same OID).
 pub fn get_oid(name: &str, config: &Config) -> String {
     match get_ref(name, config) {
-        Ok(id) => id,
+        Ok(ref_val) => ref_val.value,
         _ => name.to_string(),
     }
 }
@@ -469,6 +469,11 @@ pub fn iter_comits_and_parents(
     }
 
     Ok(visited)
+}
+
+pub fn create_branch(name: &str, oid: &str, config: &Config) -> Result<()> {
+    update_ref(Path::new(&format!("refs/heads/{}", name)), oid, config)?;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -663,7 +668,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        // check if head has the correct oid as "second commit"
+        // check if head has the correct oid as "first commit"
         assert_eq!(
             fs::read_to_string(config.git_dir.join("refs/tags/first commit"))?,
             first_oid
@@ -693,8 +698,22 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
+        // add extra file and create third commit
+        std::fs::write(
+            temp_dir.path().join("extra_third.txt"),
+            "new content for third commit",
+        )?;
+        let _third_oid = create_commit("third message".to_string(), &config)?;
+        create_tag("third commit", &second_oid, &config)?;
+
         println!("{}", k(&config)?);
 
+        Ok(())
+    }
+
+    #[test]
+    fn test_branches() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
         Ok(())
     }
 }

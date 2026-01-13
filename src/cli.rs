@@ -68,6 +68,11 @@ pub enum Commands {
         oid: Option<String>,
     },
     K,
+    Branch {
+        #[arg(required = true)]
+        name: String,
+        start_point: Option<String>,
+    },
 }
 
 pub fn init_repository(config: &Config) -> Result<(), Error> {

@@ -6,7 +6,7 @@ use clap::Parser;
 use cli::{Args, Commands, init_repository};
 
 use crate::{
-    base::{checkout, create_tag, get_oid, k, log},
+    base::{checkout, create_branch, create_tag, get_oid, k, log},
     cli::Config,
     data::get_ref,
 };
@@ -56,7 +56,7 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("@", &config) {
-                    Ok(oid) => oid,
+                    Ok(oid) => oid.value,
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;
@@ -98,6 +98,19 @@ fn main() {
         }
         Commands::K => {
             let _ = k(&config);
+        }
+        Commands::Branch { name, start_point } => {
+            let start = start_point.unwrap_or_else(|| "@".to_string());
+            match create_branch(&name, &start, &config) {
+                Ok(_) => println!(
+                    "Branch '{}' with starting point {} created successfully",
+                    name, start
+                ),
+                Err(e) => eprintln!(
+                    "Error occured when attempting to create branch {} at starting point {}: {}",
+                    name, start, e
+                ),
+            }
         }
     }
 }

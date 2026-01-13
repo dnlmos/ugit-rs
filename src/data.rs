@@ -1,6 +1,7 @@
 use anyhow::{Context, Error, Result, anyhow};
+use clap::builder::Str;
 use sha1::{Digest, Sha1};
-use std::{fmt, fs, path::Path};
+use std::{cell::Ref, fmt, fs, path::Path};
 
 use crate::cli::Config;
 
@@ -119,7 +120,7 @@ pub fn update_ref(ref_: &Path, oid: &str, config: &Config) -> Result<()> {
 /// # Errors
 /// Returns an error if the reference cannot be found in any of the attempted
 /// locations or if a reference file exists but cannot be read.
-pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
+pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
     let git_dir = &config.git_dir;
 
     let refs_to_try = vec![
@@ -133,7 +134,17 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
 
     for path in &refs_to_try {
         match fs::read_to_string(path) {
-            Ok(contents) => return Ok(contents.trim().to_string()),
+            Ok(contents) => {
+                let mut value = contents.trim().to_string();
+                if !value.is_empty() && value.starts_with("ref:") {
+                    // split_off 'ref:'
+                    return get_ref(&value.split_off(4), config);
+                }
+                return Ok(RefValue {
+                    value,
+                    symbolic: false,
+                });
+            }
             Err(e) => {
                 last_err =
                     Some(anyhow!(e).context(format!("Failed to read ref at {}", path.display())));
@@ -154,11 +165,11 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<String> {
 }
 
 /// iterate through all refs in refs/tags/
-pub fn iter_refs(config: &Config) -> Result<Vec<(String, String)>> {
+pub fn iter_refs(config: &Config) -> Result<Vec<(String, RefValue)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
 
     // ref name, get_ref
-    let mut entries: Vec<(String, String)> = Vec::new();
+    let mut entries: Vec<(String, RefValue)> = Vec::new();
     for entry in fs::read_dir(ref_path)? {
         let entry = entry?;
         if entry.path().is_file() {
@@ -202,6 +213,23 @@ impl fmt::Display for ObjectType {
 impl fmt::Debug for ObjectType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{}", self.as_str())
+    }
+}
+
+pub struct RefValue {
+    pub value: String,
+    pub symbolic: bool,
+}
+
+impl fmt::Display for RefValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{} {}", self.value, self.symbolic)
+    }
+}
+
+impl fmt::Debug for RefValue {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "Value: {} | Is symbolic: {}", self.value, self.symbolic)
     }
 }
 
