@@ -1,4 +1,4 @@
-use crate::data::{ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
+use crate::data::{ObjectType, RefValue, get_object, get_ref, hash_object, iter_refs, update_ref};
 use anyhow::anyhow;
 use colored::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -278,7 +278,7 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    let head = get_ref("@", config).context("Failed reading HEAD");
+    let head = get_ref("refs/heads/@", config).context("Failed reading HEAD");
     if let Ok(head_ref) = head {
         writeln!(&mut commit, "parent {}", head_ref.value)
             .context("Failed to format commit object")?;
@@ -287,7 +287,16 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
 
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    update_ref(Path::new("refs/heads/@"), &commit_oid, config).context("Failed to set HEAD")?;
+    update_ref(
+        RefValue {
+            value: "refs/heads/@".to_string(),
+            symbolic: false,
+        },
+        &commit_oid,
+        config,
+    )
+    .context("Failed to set HEAD")?;
+
     Ok(commit_oid)
 }
 
@@ -359,7 +368,6 @@ pub fn log(oid: &str, config: &Config) -> Result<String> {
             writeln!(history, "     | {}", line)?;
         }
         writeln!(history, "     |")?;
-
         writeln!(history)?;
         current_oid = commit.parent;
     }
@@ -379,12 +387,25 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
         get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
-
-    update_ref(Path::new("refs/heads/@"), oid, config)
+    update_ref(
+        RefValue {
+            value: "refs/heads/@".to_string(),
+            symbolic: false,
+        },
+        oid,
+        config,
+    )
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(Path::new(&format!("refs/tags/{name}")), oid, config)?;
+    update_ref(
+        RefValue {
+            value: format!("refs/tags/{name}"),
+            symbolic: false,
+        },
+        oid,
+        config,
+    )?;
     Ok(())
 }
 
@@ -444,10 +465,19 @@ pub fn k(config: &Config) -> Result<String> {
 /// function will return the OID that the ref points to) or an OID
 /// (in which case get_oid will just return that same OID).
 pub fn get_oid(name: &str, config: &Config) -> String {
-    match get_ref(name, config) {
-        Ok(ref_val) => ref_val.value,
-        _ => name.to_string(),
+    let refs_to_try = vec![
+        name.to_string(),
+        format!("refs/{name}"),
+        format!("refs/tags/{name}"),
+        format!("refs/heads/{name}"),
+    ];
+
+    for path in refs_to_try {
+        if let Ok(ref_val) = get_ref(&path, config) {
+            return ref_val.value;
+        }
     }
+    name.to_string()
 }
 
 pub fn iter_comits_and_parents(
@@ -476,7 +506,14 @@ pub fn iter_comits_and_parents(
 }
 
 pub fn create_branch(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(Path::new(&format!("refs/heads/{}", name)), oid, config)?;
+    update_ref(
+        RefValue {
+            value: format!("refs/heads/{}", name),
+            symbolic: false,
+        },
+        oid,
+        config,
+    )?;
     Ok(())
 }
 
@@ -617,7 +654,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?.value, first_oid);
+        assert_eq!(get_ref("refs/heads/@", &config)?.value, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -628,7 +665,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?.value, second_oid);
+        assert_eq!(get_ref("refs/heads/@", &config)?.value, second_oid);
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
@@ -717,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_branches() -> Result<()> {
-        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
+        let (_temp_dir, _config) = create_test_repo().expect("failed to create test repository");
         Ok(())
     }
 }

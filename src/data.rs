@@ -1,7 +1,6 @@
 use anyhow::{Context, Error, Result, anyhow};
-use clap::builder::Str;
 use sha1::{Digest, Sha1};
-use std::{cell::Ref, fmt, fs, path::Path};
+use std::{fmt, fs};
 
 use crate::cli::Config;
 
@@ -87,8 +86,9 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 ///
 /// # Errors
 /// Returns an error if the directories cannot be created or the file cannot be written.
-pub fn update_ref(ref_: &Path, oid: &str, config: &Config) -> Result<()> {
-    let ref_path = config.git_dir.join(ref_);
+pub fn update_ref(ref_: RefValue, oid: &str, config: &Config) -> Result<()> {
+    assert!(!ref_.symbolic);
+    let ref_path = config.git_dir.join(ref_.value);
 
     if let Some(parent) = ref_path.parent() {
         fs::create_dir_all(parent)
@@ -98,6 +98,10 @@ pub fn update_ref(ref_: &Path, oid: &str, config: &Config) -> Result<()> {
     fs::write(&ref_path, oid)
         .with_context(|| format!("Failed to write a file {}", ref_path.display()))?;
     Ok(())
+}
+
+pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
+    Ok(get_ref_internal(ref_, config)?.1)
 }
 
 /// Resolves a Git reference and returns the OID it points to.
@@ -120,48 +124,26 @@ pub fn update_ref(ref_: &Path, oid: &str, config: &Config) -> Result<()> {
 /// # Errors
 /// Returns an error if the reference cannot be found in any of the attempted
 /// locations or if a reference file exists but cannot be read.
-pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
-    let git_dir = &config.git_dir;
+pub fn get_ref_internal(ref_: &str, config: &Config) -> Result<(String, RefValue)> {
+    let ref_path = &config.git_dir.join(ref_);
+    match fs::read_to_string(ref_path) {
+        Ok(contents) => {
+            let value = contents.trim().to_string();
 
-    let refs_to_try = vec![
-        git_dir.join(ref_),
-        git_dir.join("refs").join(ref_),
-        git_dir.join("refs").join("tags").join(ref_),
-        git_dir.join("refs").join("heads").join(ref_),
-    ];
+            if let Some(target) = value.strip_prefix("ref:") {
+                return get_ref_internal(target, config);
+            }
 
-    let mut last_err = None;
-
-    for path in &refs_to_try {
-        match fs::read_to_string(path) {
-            Ok(contents) => {
-                let mut value = contents.trim().to_string();
-                if !value.is_empty() && value.starts_with("ref:") {
-                    // split_off 'ref:'
-                    return get_ref(&value.split_off(4), config);
-                }
-                return Ok(RefValue {
+            Ok((
+                ref_.to_string(),
+                RefValue {
                     value,
                     symbolic: false,
-                });
-            }
-            Err(e) => {
-                last_err =
-                    Some(anyhow!(e).context(format!("Failed to read ref at {}", path.display())));
-            }
+                },
+            ))
         }
+        Err(e) => Err(anyhow!(e).context(format!("Failed to read ref at {}", ref_path.display()))),
     }
-
-    Err(anyhow!(
-        "Ref '{}' not found. Tried:\n{}",
-        ref_,
-        refs_to_try
-            .iter()
-            .map(|p| format!("  {}", p.display()))
-            .collect::<Vec<_>>()
-            .join("\n")
-    )
-    .context(last_err.unwrap_or_else(|| anyhow!("No ref paths attempted"))))
 }
 
 /// iterate through all refs in refs/tags/
