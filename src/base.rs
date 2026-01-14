@@ -279,8 +279,9 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
     let head = get_ref("@", config).context("Failed reading HEAD");
-    if let Ok(head_oid) = head {
-        writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
+    if let Ok(head_ref) = head {
+        writeln!(&mut commit, "parent {}", head_ref.value)
+            .context("Failed to format commit object")?;
     }
     write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
 
@@ -369,7 +370,7 @@ pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
     if is_valid_sha1(oid) {
         Ok(String::from(oid))
     } else {
-        Ok(get_ref(oid, config)?)
+        Ok(get_ref(oid, config)?.value)
     }
 }
 
@@ -395,8 +396,11 @@ pub fn k(config: &Config) -> Result<String> {
 
     for entry in iter_refs(config).iter() {
         for x in entry.iter() {
-            refs_map.entry(x.1.clone()).or_default().push(x.0.clone());
-            oids.insert(x.1.clone());
+            refs_map
+                .entry(x.1.value.clone())
+                .or_default()
+                .push(x.0.clone());
+            oids.insert(x.1.value.clone());
         }
     }
 
@@ -613,7 +617,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?, first_oid);
+        assert_eq!(get_ref("@", &config)?.value, first_oid);
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -624,7 +628,7 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?, second_oid);
+        assert_eq!(get_ref("@", &config)?.value, second_oid);
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"

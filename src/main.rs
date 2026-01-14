@@ -80,7 +80,7 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("@", &config) {
-                    Ok(oid) => oid,
+                    Ok(ref_val) => ref_val.value,
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;

@@ -221,12 +221,6 @@ pub struct RefValue {
     pub symbolic: bool,
 }
 
-impl fmt::Display for RefValue {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} {}", self.value, self.symbolic)
-    }
-}
-
 impl fmt::Debug for RefValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Value: {} | Is symbolic: {}", self.value, self.symbolic)
