@@ -106,24 +106,15 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
 
 /// Resolves a Git reference and returns the OID it points to.
 ///
-/// This function attempts to read the reference from multiple locations,
-/// in the same order Git commonly resolves refs:
-///
-/// - `<git_dir>/<ref_>`
-/// - `<git_dir>/refs/<ref_>`
-/// - `<git_dir>/refs/tags/<ref_>`
-/// - `<git_dir>/refs/heads/<ref_>`
-///
 /// # Arguments
-/// * `ref_` - The reference name (e.g. `HEAD` (@), `main`)
+/// * `ref_` - The reference name (e.g. `refs/heads/@`, `refs/tags/commit123`)
 /// * `config` - Repository configuration
 ///
 /// # Returns
-/// The object ID (OID) the reference points to, as a trimmed string.
+/// The object Ref name and RefValue which contains OID and flag if it is symbolic ref.
 ///
 /// # Errors
-/// Returns an error if the reference cannot be found in any of the attempted
-/// locations or if a reference file exists but cannot be read.
+/// Returns an error if the reference cannot be found or if a reference file exists but cannot be read.
 pub fn get_ref_internal(ref_: &str, config: &Config) -> Result<(String, RefValue)> {
     let ref_path = &config.git_dir.join(ref_);
     match fs::read_to_string(ref_path) {
@@ -149,14 +140,15 @@ pub fn get_ref_internal(ref_: &str, config: &Config) -> Result<(String, RefValue
 /// iterate through all refs in refs/tags/
 pub fn iter_refs(config: &Config) -> Result<Vec<(String, RefValue)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
-
-    // ref name, get_ref
     let mut entries: Vec<(String, RefValue)> = Vec::new();
-    for entry in fs::read_dir(ref_path)? {
+
+    for entry in fs::read_dir(&ref_path)? {
         let entry = entry?;
         if entry.path().is_file() {
-            let filename = entry.file_name().to_string_lossy().to_string();
-            entries.push((filename.clone(), get_ref(&filename, config)?));
+            let filename = entry.file_name().to_string_lossy().into_owned();
+            if let Some(path_str) = ref_path.join(&filename).to_str() {
+                entries.push((filename, get_ref(path_str, config)?));
+            }
         }
     }
 
