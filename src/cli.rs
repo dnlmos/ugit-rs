@@ -1,6 +1,4 @@
-use anyhow::{Error, Result};
 use clap::{Parser, Subcommand};
-use std::fs::{self};
 
 pub struct Config {
     pub base_dir: std::path::PathBuf,
@@ -73,15 +71,4 @@ pub enum Commands {
         name: String,
         start_point: Option<String>,
     },
-}
-
-pub fn init_repository(config: &Config) -> Result<(), Error> {
-    if fs::exists(config.git_dir.join("objects"))? {
-        println!("Repository already initialized");
-        Ok(())
-    } else {
-        println!("Initializing repository {}...", &config.git_dir.display());
-        fs::create_dir_all(config.git_dir.join("objects"))?;
-        Ok(())
-    }
 }

@@ -1,9 +1,11 @@
 mod base;
 mod cli;
 mod data;
+mod utils;
 
+use crate::base::init_repository;
 use clap::Parser;
-use cli::{Args, Commands, init_repository};
+use cli::{Args, Commands};
 
 use crate::{
     base::{checkout, create_branch, create_tag, get_oid, k, log},
@@ -56,15 +58,19 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(oid) => oid.to_string(),
+                    Ok(Some(oid)) => oid.to_string(),
+                    Ok(None) => {
+                        eprintln!("No OID provided and HEAD does not exist");
+                        return;
+                    }
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;
                     }
                 },
             };
-            let oid = get_oid(&target_oid, &config);
-            match log(&oid, &config) {
+            get_oid(&target_oid, &config);
+            match log(&target_oid, &config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
             };
@@ -80,7 +86,11 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(ref_) => ref_.to_string(),
+                    Ok(Some(ref_)) => ref_.to_string(),
+                    Ok(None) => {
+                        eprintln!("No OID provided and HEAD does not exist");
+                        return;
+                    }
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;

@@ -81,7 +81,7 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 
 /// Fetches a reference value.
 /// Replicates: get_ref(name, deref=True)
-pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<RefTarget> {
+pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<Option<RefTarget>> {
     let deref = matches!(follow, Follow::IfSymbolic);
     let (_, ref_value) = get_ref_internal(name, deref, config)?;
     Ok(ref_value)
@@ -89,7 +89,6 @@ pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<RefTarget
 
 pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Config) -> Result<()> {
     let deref = matches!(follow, Follow::IfSymbolic);
-
     // resolve the path
     // if get_ref_internal fails because the ref is missing,
     // we use the 'name' itself as the target path.
@@ -98,20 +97,13 @@ pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Conf
         Ok((path, _)) => path,
         Err(_) => name.to_string(),
     };
-
-    match target {
-        RefTarget::Symbolic(path) => println!("Following link to: {}", path),
-        RefTarget::Direct(oid) => println!("Found commit hash: {}", oid),
-    }
-
     let full_path = config.git_dir.join(&actual_path);
-
     if let Some(parent) = full_path.parent() {
         fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory {}", parent.display()))?;
     }
-
     // write the OID (create or overwrite)
+
     fs::write(&full_path, target.to_string()).with_context(|| {
         format!(
             "Failed to write ref '{}' to {}",
@@ -119,7 +111,6 @@ pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Conf
             full_path.display()
         )
     })?;
-
     Ok(())
 }
 
@@ -134,31 +125,37 @@ pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Conf
 ///
 /// # Errors
 /// Returns an error if the reference cannot be found or if a reference file exists but cannot be read.
-fn get_ref_internal(ref_: &str, deref: bool, config: &Config) -> Result<(String, RefTarget)> {
-    let ref_path = config.git_dir.join(ref_);
+fn get_ref_internal(
+    ref_name: &str,
+    deref: bool,
+    config: &Config,
+) -> Result<(String, Option<RefTarget>)> {
+    let ref_path = config.git_dir.join(ref_name);
 
-    let contents = fs::read_to_string(&ref_path)
-        .map_err(|e| anyhow!("failed to read ref {}: {}", ref_path.display(), e))?;
-
-    let contents = contents.trim();
-
-    // symbolic ref: "ref: refs/heads/main"
-    if let Some(target) = contents.strip_prefix("ref: ") {
-        let target = target.trim().to_string();
-
-        println!("&&&& {contents}");
-
+    if !ref_path.exists() {
+        // If the ref doesn't exist and we're dereferencing, return the path
+        // so update_ref can create it. If not dereferencing, return error.
         if deref {
-            // Preserve original ref name when dereferencing
-            let (_, value) = get_ref_internal(&target, true, config)?;
-            return Ok((ref_.to_string(), value));
+            return Ok((ref_name.to_string(), None));
         }
-
-        return Ok((ref_.to_string(), RefTarget::Symbolic(target)));
+        return Err(anyhow::anyhow!("Reference '{}' not found", ref_name));
     }
 
-    // Direct ref (OID)
-    Ok((ref_.to_string(), RefTarget::Direct(contents.to_string())))
+    let contents = fs::read_to_string(&ref_path)?.trim().to_string();
+
+    if let Some(target_path) = contents.strip_prefix("ref: ") {
+        let target_path = target_path.trim();
+        if deref {
+            return get_ref_internal(target_path, true, config);
+        }
+        return Ok((
+            ref_name.to_string(),
+            Some(RefTarget::Symbolic(target_path.to_string())),
+        ));
+    }
+
+    // Direct ref
+    Ok((ref_name.to_string(), Some(RefTarget::Direct(contents))))
 }
 
 /// iterate through all refs in refs/tags/
@@ -171,7 +168,11 @@ pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, RefTarg
         if entry.path().is_file() {
             let filename = entry.file_name().to_string_lossy().into_owned();
             if let Some(path_str) = ref_path.join(&filename).to_str() {
-                entries.push((filename, get_ref(path_str, &follow, config)?));
+                entries.push((
+                    filename,
+                    get_ref(path_str, &follow, config)?
+                        .ok_or_else(|| anyhow!("ref does not exists"))?,
+                ));
             }
         }
     }
@@ -215,7 +216,7 @@ impl fmt::Debug for ObjectType {
 }
 
 pub enum RefTarget {
-    /// Points directly to an Object ID (e.g., a commit hash)
+    /// Points directly to an OID
     Direct(String),
     /// Points to another reference (e.g., "ref: refs/heads/master")
     Symbolic(String),
@@ -240,7 +241,8 @@ pub enum Follow {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{Config, init_repository};
+    use crate::base::init_repository;
+    use crate::cli::Config;
     use tempfile::tempdir;
 
     #[test]
