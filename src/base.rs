@@ -235,7 +235,6 @@ fn empty_working_dir(config: &Config) {
         })
     {
         let path = entry.path();
-        // println!("[deleting] {:?}", path);
 
         // since it may contain ignored file, ignore errors
         if path.is_file() {
@@ -318,7 +317,6 @@ pub fn get_commit(oid: &str, config: &Config) -> Result<Commit> {
     let commit_str = std::str::from_utf8(&bytes)
         .with_context(|| format!("Commit '{}' contains invalid UTF-8 data", oid))?;
     let mut lines = commit_str.lines().enumerate();
-    println!("{:?}", commit_str);
 
     let mut tree = "";
     let mut parent = None;
@@ -516,7 +514,6 @@ pub fn iter_comits_and_parents(
 
     while !oids.is_empty() {
         let oid_ = oids.pop_front();
-        // println!("{oids:?}");
         if let Some(oid) = oid_ {
             // oids.push(oid.clone()); // ???
             if !visited.contains(&oid) {
@@ -557,10 +554,6 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             git_dir: temp_dir.path().join(".ugit"),
         };
-
-        // println!("BASE_DIR> {:?}", config.base_dir);
-        // println!("GIT_DIR> {:?}", config.git_dir);
-
         init_repository(&config)?;
         Ok((temp_dir, config))
     }
@@ -610,7 +603,6 @@ mod tests {
 
         let tree_oid = write_tree(temp_dir.path(), &config)?;
 
-        println!("Tree OID: {}", tree_oid);
         assert!(!tree_oid.is_empty());
 
         // Verify the tree object was created
@@ -719,14 +711,8 @@ mod tests {
         create_test_file_structure(temp_dir.path())?;
         let first_oid = create_commit("first message".to_string(), &config)?;
         create_tag("first commit", &first_oid, &config)?;
-        println!(
-            "tutututututututuut {:?}",
-            fs::read_dir(config.git_dir.join("refs/tags/"))?
-        );
         let mut state_one = get_repository_contents(&config)?;
         state_one.sort();
-
-        println!("OID {first_oid}");
 
         // add extra file and create second commit
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
