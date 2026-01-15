@@ -8,7 +8,7 @@ use cli::{Args, Commands, init_repository};
 use crate::{
     base::{checkout, create_branch, create_tag, get_oid, k, log},
     cli::Config,
-    data::get_ref,
+    data::{Follow, get_ref},
 };
 
 fn main() {
@@ -55,7 +55,7 @@ fn main() {
         Commands::Log { oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("@", &config) {
+                None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
                     Ok(oid) => oid.value,
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
@@ -79,7 +79,7 @@ fn main() {
         Commands::Tag { name, oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("@", &config) {
+                None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
                     Ok(ref_val) => ref_val.value,
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");

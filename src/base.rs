@@ -1,4 +1,4 @@
-use crate::data::{ObjectType, RefValue, get_object, get_ref, hash_object, iter_refs, update_ref};
+use crate::data::{Follow, ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
 use anyhow::anyhow;
 use colored::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -272,31 +272,23 @@ pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
 /// oid of the commit object
 pub fn create_commit(message: String, config: &Config) -> Result<String> {
     let mut commit = String::new();
-
     let tree_hash = write_tree(&config.base_dir, config)
         .context("Could not generate tree hash during commit")?;
-
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    let head = get_ref("refs/heads/@", config).context("Failed reading HEAD");
+    // Get HEAD (points to current branch) - head is usually symbolic
+    let head = get_ref("HEAD", &Follow::IfSymbolic, config).context("Failed reading HEAD");
     if let Ok(head_ref) = head {
         writeln!(&mut commit, "parent {}", head_ref.value)
             .context("Failed to format commit object")?;
     }
-    write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
 
+    write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
         .context("Failed to save commit to object database")?;
-    update_ref(
-        RefValue {
-            value: "refs/heads/@".to_string(),
-            symbolic: false,
-        },
-        &commit_oid,
-        config,
-    )
-    .context("Failed to set HEAD")?;
 
+    // Update HEAD to point to new commit
+    update_ref("HEAD", &commit_oid, &Follow::IfSymbolic, config).context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -378,7 +370,7 @@ pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
     if is_valid_sha1(oid) {
         Ok(String::from(oid))
     } else {
-        Ok(get_ref(oid, config)?.value)
+        Ok(get_ref(oid, &Follow::IfSymbolic, config)?.value)
     }
 }
 
@@ -387,26 +379,14 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
         get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
     read_tree(&commit.tree, config)
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
-    update_ref(
-        RefValue {
-            value: "refs/heads/@".to_string(),
-            symbolic: false,
-        },
-        oid,
-        config,
-    )
+
+    // Update HEAD to point directly to the commit (detached HEAD state)
+    update_ref("HEAD", oid, &Follow::IfSymbolic, config)
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(
-        RefValue {
-            value: format!("refs/tags/{name}"),
-            symbolic: false,
-        },
-        oid,
-        config,
-    )?;
-    Ok(())
+    // tag is a direct reference, so we pass 'Follow::Never'
+    update_ref(&format!("refs/tags/{name}"), oid, &Follow::Never, config)
 }
 
 // Return formatted output of git history
@@ -415,7 +395,7 @@ pub fn k(config: &Config) -> Result<String> {
     let mut refs_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut oids = BTreeSet::new();
 
-    for entry in iter_refs(config).iter() {
+    for entry in iter_refs(Follow::IfSymbolic, config).iter() {
         for x in entry.iter() {
             refs_map
                 .entry(x.1.value.clone())
@@ -473,7 +453,7 @@ pub fn get_oid(name: &str, config: &Config) -> String {
     ];
 
     for path in refs_to_try {
-        if let Ok(ref_val) = get_ref(&path, config) {
+        if let Ok(ref_val) = get_ref(&path, &Follow::IfSymbolic, config) {
             return ref_val.value;
         }
     }
@@ -506,15 +486,9 @@ pub fn iter_comits_and_parents(
 }
 
 pub fn create_branch(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(
-        RefValue {
-            value: format!("refs/heads/{}", name),
-            symbolic: false,
-        },
-        oid,
-        config,
-    )?;
-    Ok(())
+    let ref_path = format!("refs/heads/{}", name);
+    // branches and tags are direct references
+    update_ref(&ref_path, oid, &Follow::Never, config)
 }
 
 #[cfg(test)]
@@ -654,7 +628,10 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("refs/heads/@", &config)?.value, first_oid);
+        assert_eq!(
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.value,
+            first_oid
+        );
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -665,7 +642,10 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("refs/heads/@", &config)?.value, second_oid);
+        assert_eq!(
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.value,
+            second_oid
+        );
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
@@ -696,10 +676,7 @@ mod tests {
             second_oid
         );
         // check if head has the correct oid as "second commit"
-        assert_eq!(
-            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
-            second_oid
-        );
+        assert_eq!(fs::read_to_string(config.git_dir.join("HEAD"))?, second_oid);
 
         let mut state_two = get_repository_contents(&config)?;
         state_two.sort();
@@ -715,10 +692,7 @@ mod tests {
             first_oid
         );
         // check if tag is created and contains correct oid
-        assert_eq!(
-            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
-            first_oid
-        );
+        assert_eq!(fs::read_to_string(config.git_dir.join("HEAD"))?, first_oid);
 
         assert_eq!(
             current_entries, state_one,

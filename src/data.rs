@@ -76,32 +76,38 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     Ok(obj[null_pos + 1..].to_owned())
 }
 
-/// Creates or updates a tag reference by writing the given `oid`
-/// to `.ugit/refs/tags/<ref_>`. Automatically creates parent directories.
-///
-/// # Arguments
-/// * `ref_` - Tag name
-/// * `oid` - Object ID to point the tag at
-/// * `config` - Repository configuration
-///
-/// # Errors
-/// Returns an error if the directories cannot be created or the file cannot be written.
-pub fn update_ref(ref_: RefValue, oid: &str, config: &Config) -> Result<()> {
-    assert!(!ref_.symbolic);
-    let ref_path = config.git_dir.join(ref_.value);
-
-    if let Some(parent) = ref_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to setup refs directory {}", parent.display()))?;
-    }
-
-    fs::write(&ref_path, oid)
-        .with_context(|| format!("Failed to write a file {}", ref_path.display()))?;
-    Ok(())
+/// Fetches a reference value.
+/// Replicates: get_ref(name, deref=True)
+pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<RefValue> {
+    let deref = matches!(follow, Follow::IfSymbolic);
+    let (_, ref_value) = get_ref_internal(name, deref, config)?;
+    Ok(ref_value)
 }
 
-pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
-    Ok(get_ref_internal(ref_, config)?.1)
+pub fn update_ref(name: &str, oid: &str, follow: &Follow, config: &Config) -> Result<()> {
+    let deref = matches!(follow, Follow::IfSymbolic);
+
+    // resolve the path
+    // if get_ref_internal fails because the ref is missing,
+    // we use the 'name' itself as the target path.
+    // we ignore actual content of the file since we overwrite it
+    let actual_path = match get_ref_internal(name, deref, config) {
+        Ok((path, _)) => path,
+        Err(_) => name.to_string(),
+    };
+
+    let full_path = config.git_dir.join(&actual_path);
+
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+
+    // write the OID (create or overwrite)
+    fs::write(&full_path, oid)
+        .with_context(|| format!("Failed to write ref '{}' to {}", name, full_path.display()))?;
+
+    Ok(())
 }
 
 /// Resolves a Git reference and returns the OID it points to.
@@ -115,30 +121,45 @@ pub fn get_ref(ref_: &str, config: &Config) -> Result<RefValue> {
 ///
 /// # Errors
 /// Returns an error if the reference cannot be found or if a reference file exists but cannot be read.
-pub fn get_ref_internal(ref_: &str, config: &Config) -> Result<(String, RefValue)> {
-    let ref_path = &config.git_dir.join(ref_);
-    match fs::read_to_string(ref_path) {
-        Ok(contents) => {
-            let value = contents.trim().to_string();
+fn get_ref_internal(ref_: &str, deref: bool, config: &Config) -> Result<(String, RefValue)> {
+    let ref_path = config.git_dir.join(ref_);
 
-            if let Some(target) = value.strip_prefix("ref:") {
-                return get_ref_internal(target, config);
-            }
+    let contents = fs::read_to_string(&ref_path)
+        .map_err(|e| anyhow!("failed to read ref {}: {}", ref_path.display(), e))?;
 
-            Ok((
-                ref_.to_string(),
-                RefValue {
-                    value,
-                    symbolic: false,
-                },
-            ))
+    let contents = contents.trim();
+
+    // symbolic ref: "ref: refs/heads/main"
+    if let Some(target) = contents.strip_prefix("ref: ") {
+        let target = target.trim().to_string();
+
+        if deref {
+            // Preserve original ref name when dereferencing
+            let (_, value) = get_ref_internal(&target, true, config)?;
+            return Ok((ref_.to_string(), value));
         }
-        Err(e) => Err(anyhow!(e).context(format!("Failed to read ref at {}", ref_path.display()))),
+
+        return Ok((
+            ref_.to_string(),
+            RefValue {
+                value: target,
+                symbolic: true,
+            },
+        ));
     }
+
+    // Direct ref (OID)
+    Ok((
+        ref_.to_string(),
+        RefValue {
+            value: contents.to_string(),
+            symbolic: false,
+        },
+    ))
 }
 
 /// iterate through all refs in refs/tags/
-pub fn iter_refs(config: &Config) -> Result<Vec<(String, RefValue)>> {
+pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, RefValue)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
     let mut entries: Vec<(String, RefValue)> = Vec::new();
 
@@ -147,7 +168,7 @@ pub fn iter_refs(config: &Config) -> Result<Vec<(String, RefValue)>> {
         if entry.path().is_file() {
             let filename = entry.file_name().to_string_lossy().into_owned();
             if let Some(path_str) = ref_path.join(&filename).to_str() {
-                entries.push((filename, get_ref(path_str, config)?));
+                entries.push((filename, get_ref(path_str, &follow, config)?));
             }
         }
     }
@@ -199,6 +220,13 @@ impl fmt::Debug for RefValue {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Value: {} | Is symbolic: {}", self.value, self.symbolic)
     }
+}
+
+pub enum Follow {
+    /// Follow symbolic refs to the ultimate target (deref=True)
+    IfSymbolic,
+    /// Act on the ref itself (deref=False)
+    Never,
 }
 
 #[cfg(test)]
