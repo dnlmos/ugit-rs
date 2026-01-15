@@ -56,7 +56,7 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(oid) => oid.value,
+                    Ok(oid) => oid.to_string(),
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;
@@ -80,7 +80,7 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(ref_val) => ref_val.value,
+                    Ok(ref_) => ref_.to_string(),
                     Err(e) => {
                         eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
                         return;

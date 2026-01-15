@@ -1,4 +1,6 @@
-use crate::data::{Follow, ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
+use crate::data::{
+    Follow, ObjectType, RefTarget, get_object, get_ref, hash_object, iter_refs, update_ref,
+};
 use anyhow::anyhow;
 use colored::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
@@ -276,11 +278,10 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
         .context("Could not generate tree hash during commit")?;
     writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
 
-    // Get HEAD (points to current branch) - head is usually symbolic
+    // Get HEAD (points to current branch)
     let head = get_ref("HEAD", &Follow::IfSymbolic, config).context("Failed reading HEAD");
     if let Ok(head_ref) = head {
-        writeln!(&mut commit, "parent {}", head_ref.value)
-            .context("Failed to format commit object")?;
+        writeln!(&mut commit, "parent {}", head_ref).context("Failed to format commit object")?;
     }
 
     write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
@@ -288,7 +289,13 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
         .context("Failed to save commit to object database")?;
 
     // Update HEAD to point to new commit
-    update_ref("HEAD", &commit_oid, &Follow::IfSymbolic, config).context("Failed to set HEAD")?;
+    update_ref(
+        "HEAD",
+        &RefTarget::Direct(commit_oid.to_string()),
+        &Follow::IfSymbolic,
+        config,
+    )
+    .context("Failed to set HEAD")?;
     Ok(commit_oid)
 }
 
@@ -370,7 +377,7 @@ pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
     if is_valid_sha1(oid) {
         Ok(String::from(oid))
     } else {
-        Ok(get_ref(oid, &Follow::IfSymbolic, config)?.value)
+        Ok(get_ref(oid, &Follow::IfSymbolic, config)?.to_string())
     }
 }
 
@@ -381,12 +388,22 @@ pub fn checkout(oid: &str, config: &Config) -> Result<()> {
         .with_context(|| format!("Error reading tree {}", commit.tree))?;
 
     // Update HEAD to point directly to the commit (detached HEAD state)
-    update_ref("HEAD", oid, &Follow::IfSymbolic, config)
+    update_ref(
+        "HEAD",
+        &RefTarget::Direct(oid.to_string()),
+        &Follow::IfSymbolic,
+        config,
+    )
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
     // tag is a direct reference, so we pass 'Follow::Never'
-    update_ref(&format!("refs/tags/{name}"), oid, &Follow::Never, config)
+    update_ref(
+        &format!("refs/tags/{name}"),
+        &RefTarget::Direct(oid.to_string()),
+        &Follow::Never,
+        config,
+    )
 }
 
 // Return formatted output of git history
@@ -398,10 +415,10 @@ pub fn k(config: &Config) -> Result<String> {
     for entry in iter_refs(Follow::IfSymbolic, config).iter() {
         for x in entry.iter() {
             refs_map
-                .entry(x.1.value.clone())
+                .entry(x.1.to_string())
                 .or_default()
                 .push(x.0.clone());
-            oids.insert(x.1.value.clone());
+            oids.insert(x.1.to_string());
         }
     }
 
@@ -454,7 +471,7 @@ pub fn get_oid(name: &str, config: &Config) -> String {
 
     for path in refs_to_try {
         if let Ok(ref_val) = get_ref(&path, &Follow::IfSymbolic, config) {
-            return ref_val.value;
+            return ref_val.to_string();
         }
     }
     name.to_string()
@@ -488,7 +505,12 @@ pub fn iter_comits_and_parents(
 pub fn create_branch(name: &str, oid: &str, config: &Config) -> Result<()> {
     let ref_path = format!("refs/heads/{}", name);
     // branches and tags are direct references
-    update_ref(&ref_path, oid, &Follow::Never, config)
+    update_ref(
+        &ref_path,
+        &RefTarget::Direct(oid.to_string()),
+        &Follow::Never,
+        config,
+    )
 }
 
 #[cfg(test)]
@@ -629,7 +651,7 @@ mod tests {
         current_entries.sort();
 
         assert_eq!(
-            get_ref("HEAD", &Follow::IfSymbolic, &config)?.value,
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
             first_oid
         );
         assert_eq!(
@@ -643,7 +665,7 @@ mod tests {
         current_entries.sort();
 
         assert_eq!(
-            get_ref("HEAD", &Follow::IfSymbolic, &config)?.value,
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
             second_oid
         );
         assert_eq!(

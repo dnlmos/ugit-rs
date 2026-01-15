@@ -1,6 +1,9 @@
 use anyhow::{Context, Error, Result, anyhow};
 use sha1::{Digest, Sha1};
-use std::{fmt, fs};
+use std::{
+    fmt::{self},
+    fs,
+};
 
 use crate::cli::Config;
 
@@ -78,13 +81,13 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
 
 /// Fetches a reference value.
 /// Replicates: get_ref(name, deref=True)
-pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<RefValue> {
+pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<RefTarget> {
     let deref = matches!(follow, Follow::IfSymbolic);
     let (_, ref_value) = get_ref_internal(name, deref, config)?;
     Ok(ref_value)
 }
 
-pub fn update_ref(name: &str, oid: &str, follow: &Follow, config: &Config) -> Result<()> {
+pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Config) -> Result<()> {
     let deref = matches!(follow, Follow::IfSymbolic);
 
     // resolve the path
@@ -96,6 +99,11 @@ pub fn update_ref(name: &str, oid: &str, follow: &Follow, config: &Config) -> Re
         Err(_) => name.to_string(),
     };
 
+    match target {
+        RefTarget::Symbolic(path) => println!("Following link to: {}", path),
+        RefTarget::Direct(oid) => println!("Found commit hash: {}", oid),
+    }
+
     let full_path = config.git_dir.join(&actual_path);
 
     if let Some(parent) = full_path.parent() {
@@ -104,8 +112,13 @@ pub fn update_ref(name: &str, oid: &str, follow: &Follow, config: &Config) -> Re
     }
 
     // write the OID (create or overwrite)
-    fs::write(&full_path, oid)
-        .with_context(|| format!("Failed to write ref '{}' to {}", name, full_path.display()))?;
+    fs::write(&full_path, target.to_string()).with_context(|| {
+        format!(
+            "Failed to write ref '{}' to {}",
+            target,
+            full_path.display()
+        )
+    })?;
 
     Ok(())
 }
@@ -121,7 +134,7 @@ pub fn update_ref(name: &str, oid: &str, follow: &Follow, config: &Config) -> Re
 ///
 /// # Errors
 /// Returns an error if the reference cannot be found or if a reference file exists but cannot be read.
-fn get_ref_internal(ref_: &str, deref: bool, config: &Config) -> Result<(String, RefValue)> {
+fn get_ref_internal(ref_: &str, deref: bool, config: &Config) -> Result<(String, RefTarget)> {
     let ref_path = config.git_dir.join(ref_);
 
     let contents = fs::read_to_string(&ref_path)
@@ -133,35 +146,25 @@ fn get_ref_internal(ref_: &str, deref: bool, config: &Config) -> Result<(String,
     if let Some(target) = contents.strip_prefix("ref: ") {
         let target = target.trim().to_string();
 
+        println!("&&&& {contents}");
+
         if deref {
             // Preserve original ref name when dereferencing
             let (_, value) = get_ref_internal(&target, true, config)?;
             return Ok((ref_.to_string(), value));
         }
 
-        return Ok((
-            ref_.to_string(),
-            RefValue {
-                value: target,
-                symbolic: true,
-            },
-        ));
+        return Ok((ref_.to_string(), RefTarget::Symbolic(target)));
     }
 
     // Direct ref (OID)
-    Ok((
-        ref_.to_string(),
-        RefValue {
-            value: contents.to_string(),
-            symbolic: false,
-        },
-    ))
+    Ok((ref_.to_string(), RefTarget::Direct(contents.to_string())))
 }
 
 /// iterate through all refs in refs/tags/
-pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, RefValue)>> {
+pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, RefTarget)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
-    let mut entries: Vec<(String, RefValue)> = Vec::new();
+    let mut entries: Vec<(String, RefTarget)> = Vec::new();
 
     for entry in fs::read_dir(&ref_path)? {
         let entry = entry?;
@@ -211,14 +214,19 @@ impl fmt::Debug for ObjectType {
     }
 }
 
-pub struct RefValue {
-    pub value: String,
-    pub symbolic: bool,
+pub enum RefTarget {
+    /// Points directly to an Object ID (e.g., a commit hash)
+    Direct(String),
+    /// Points to another reference (e.g., "ref: refs/heads/master")
+    Symbolic(String),
 }
 
-impl fmt::Debug for RefValue {
+impl fmt::Display for RefTarget {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Value: {} | Is symbolic: {}", self.value, self.symbolic)
+        match self {
+            RefTarget::Direct(value) => write!(f, "{value}"),
+            RefTarget::Symbolic(value) => write!(f, "ref: {value}"),
+        }
     }
 }
 
