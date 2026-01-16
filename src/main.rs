@@ -58,13 +58,9 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(Some(oid)) => oid.to_string(),
-                    Ok(None) => {
-                        eprintln!("No OID provided and HEAD does not exist");
-                        return;
-                    }
+                    Ok(oid) => oid.to_string(),
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        eprintln!("Failed to resolve a ref 'HEAD': {e}");
                         return;
                     }
                 },
@@ -86,13 +82,9 @@ fn main() {
             let target_oid = match oid {
                 Some(id) => id,
                 None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
-                    Ok(Some(ref_)) => ref_.to_string(),
-                    Ok(None) => {
-                        eprintln!("No OID provided and HEAD does not exist");
-                        return;
-                    }
+                    Ok(ref_) => ref_.to_string(),
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        eprintln!("Failed to resolve a ref 'HEAD': {e}");
                         return;
                     }
                 },

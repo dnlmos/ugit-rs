@@ -79,52 +79,31 @@ pub fn get_object(oid: &str, expected: ObjectType, config: &Config) -> Result<Ve
     Ok(obj[null_pos + 1..].to_owned())
 }
 
-/// Fetches a reference value.
-/// Replicates: get_ref(name, deref=True)
-pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<Option<RefTarget>> {
+/// Fetches a reference value (the OID).
+pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<String> {
     let deref = matches!(follow, Follow::IfSymbolic);
-    let (_, ref_value) = get_ref_internal(name, deref, config)?;
-    Ok(ref_value)
-}
 
-pub fn update_ref(name: &str, target: &RefTarget, follow: &Follow, config: &Config) -> Result<()> {
-    let deref = matches!(follow, Follow::IfSymbolic);
-    // resolve the path
-    // if get_ref_internal fails because the ref is missing,
-    // we use the 'name' itself as the target path.
-    // we ignore actual content of the file since we overwrite it
-    let actual_path = match get_ref_internal(name, deref, config) {
-        Ok((path, _)) => path,
-        Err(_) => name.to_string(),
-    };
-    let full_path = config.git_dir.join(&actual_path);
-    if let Some(parent) = full_path.parent() {
-        fs::create_dir_all(parent)
-            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    let (_, ref_target) = get_ref_internal(name, deref, config)
+        .with_context(|| format!("Failed to resolve reference '{}'", name))?;
+
+    match ref_target {
+        Some(RefTarget::Direct(oid)) => Ok(oid),
+        Some(RefTarget::Symbolic(path)) => Err(anyhow!(
+            "Reference '{}' is symbolic to '{}' and was not dereferenced",
+            name,
+            path
+        )),
+        None => Err(anyhow!(
+            "Reference '{}' exists, but doesnt have OID yet",
+            name
+        )),
     }
-    // write the OID (create or overwrite)
-
-    fs::write(&full_path, target.to_string()).with_context(|| {
-        format!(
-            "Failed to write ref '{}' to {}",
-            target,
-            full_path.display()
-        )
-    })?;
-    Ok(())
 }
 
-/// Resolves a Git reference and returns the OID it points to.
+/// Resolves a reference name to its target.
 ///
-/// # Arguments
-/// * `ref_` - The reference name (e.g. `refs/heads/@`, `refs/tags/commit123`)
-/// * `config` - Repository configuration
-///
-/// # Returns
-/// The object Ref name and RefValue which contains OID and flag if it is symbolic ref.
-///
-/// # Errors
-/// Returns an error if the reference cannot be found or if a reference file exists but cannot be read.
+/// If `deref` is true, it recursively follows "ref: " pointers until it hits an OID.
+/// Returns the final path visited and the `RefTarget` (Direct, Symbolic, or None if missing).
 fn get_ref_internal(
     ref_name: &str,
     deref: bool,
@@ -133,46 +112,69 @@ fn get_ref_internal(
     let ref_path = config.git_dir.join(ref_name);
 
     if !ref_path.exists() {
-        // If the ref doesn't exist and we're dereferencing, return the path
-        // so update_ref can create it. If not dereferencing, return error.
         if deref {
+            // If dereferencing, we return the name so it can be created/updated later
             return Ok((ref_name.to_string(), None));
         }
-        return Err(anyhow::anyhow!("Reference '{}' not found", ref_name));
+        return Err(anyhow!("Reference '{}' does not exist", ref_name));
     }
 
-    let contents = fs::read_to_string(&ref_path)?.trim().to_string();
+    let contents = fs::read_to_string(&ref_path)
+        .with_context(|| format!("Failed to read reference file at {:?}", ref_path))?
+        .trim()
+        .to_string();
 
+    // handle symbolic refs
     if let Some(target_path) = contents.strip_prefix("ref: ") {
         let target_path = target_path.trim();
+
         if deref {
+            // recursion to find the actual OID
             return get_ref_internal(target_path, true, config);
         }
+
         return Ok((
             ref_name.to_string(),
             Some(RefTarget::Symbolic(target_path.to_string())),
         ));
     }
-
-    // Direct ref
     Ok((ref_name.to_string(), Some(RefTarget::Direct(contents))))
 }
 
+pub fn update_ref(name: &str, ref_value: &RefTarget, config: &Config) -> Result<()> {
+    // find the actual file we need to write to.
+    // get_ref_internal(..., deref: true) will follow symbolic links
+    // until it finds a direct ref or a path that doesn't exist yet.
+    let (target_path, _) = get_ref_internal(name, true, config)
+        .with_context(|| format!("Failed to resolve reference path for '{}'", name))?;
+
+    let full_path = config.git_dir.join(&target_path);
+
+    // ensure the directory exists
+    if let Some(parent) = full_path.parent() {
+        fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory structure for {:?}", parent))?;
+    }
+
+    println!("Writing '{}' to '{}'", ref_value, full_path.display());
+    // write oid or ref to file
+    fs::write(&full_path, format!("{}", ref_value))
+        .with_context(|| format!("Failed to write ref value to reference at {:?}", full_path))?;
+
+    Ok(())
+}
+
 /// iterate through all refs in refs/tags/
-pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, RefTarget)>> {
+pub fn iter_refs(follow: Follow, config: &Config) -> Result<Vec<(String, String)>> {
     let ref_path = config.git_dir.join("refs").join("tags");
-    let mut entries: Vec<(String, RefTarget)> = Vec::new();
+    let mut entries: Vec<(String, String)> = Vec::new();
 
     for entry in fs::read_dir(&ref_path)? {
         let entry = entry?;
         if entry.path().is_file() {
             let filename = entry.file_name().to_string_lossy().into_owned();
             if let Some(path_str) = ref_path.join(&filename).to_str() {
-                entries.push((
-                    filename,
-                    get_ref(path_str, &follow, config)?
-                        .ok_or_else(|| anyhow!("ref does not exists"))?,
-                ));
+                entries.push((filename, get_ref(path_str, &follow, config)?));
             }
         }
     }

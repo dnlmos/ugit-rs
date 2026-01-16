@@ -43,7 +43,6 @@ pub fn init_repository(config: &Config) -> Result<(), Error> {
     update_ref(
         "HEAD",
         &RefTarget::Symbolic("refs/heads/master".to_string()),
-        &Follow::Never,
         config,
     )
 }
@@ -293,19 +292,14 @@ pub fn create_commit(message: String, config: &Config) -> Result<String> {
     let tree_hash = write_tree(&config.base_dir, config)?;
     let mut commit = format!("tree {}\n", tree_hash);
 
-    if let Some(RefTarget::Direct(oid)) = get_ref("HEAD", &Follow::IfSymbolic, config)? {
+    if let Ok(oid) = get_ref("HEAD", &Follow::IfSymbolic, config) {
         writeln!(&mut commit, "parent {}", oid)?;
     }
 
     commit.push_str(&format!("\n{}\n", message));
     let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)?;
 
-    update_ref(
-        "HEAD",
-        &RefTarget::Direct(commit_oid.clone()),
-        &Follow::IfSymbolic,
-        config,
-    )?;
+    update_ref("HEAD", &RefTarget::Direct(commit_oid.clone()), config)?;
 
     Ok(commit_oid)
 }
@@ -388,15 +382,7 @@ pub fn resolve_oid(name: &str, config: &Config) -> Result<String> {
     if is_valid_sha1(name) {
         return Ok(name.to_string());
     }
-
-    let oid = match get_ref(name, &Follow::IfSymbolic, config)?
-        .ok_or_else(|| anyhow!("ref '{}' not found", name))?
-    {
-        RefTarget::Direct(oid) => oid,
-        _ => unreachable!(),
-    };
-
-    Ok(oid)
+    get_ref(name, &Follow::IfSymbolic, config)
 }
 
 pub fn checkout(name: &str, config: &Config) -> Result<()> {
@@ -412,7 +398,7 @@ pub fn checkout(name: &str, config: &Config) -> Result<()> {
     };
 
     // Update HEAD to point directly to the commit (detached HEAD state)
-    update_ref("HEAD", &head, &Follow::IfSymbolic, config)
+    update_ref("HEAD", &head, config)
 }
 
 fn is_branch(name: &str, config: &Config) -> bool {
@@ -424,11 +410,9 @@ fn is_branch(name: &str, config: &Config) -> bool {
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
-    // tag is a direct reference, so we pass 'Follow::Never'
     update_ref(
         &format!("refs/tags/{}", name),
         &RefTarget::Direct(oid.to_string()),
-        &Follow::Never,
         config,
     )
 }
@@ -497,7 +481,7 @@ pub fn get_oid(name: &str, config: &Config) -> String {
     ];
 
     for path in refs_to_try {
-        if let Ok(Some(RefTarget::Direct(oid))) = get_ref(path, &Follow::IfSymbolic, config) {
+        if let Ok(oid) = get_ref(path, &Follow::IfSymbolic, config) {
             return oid;
         }
     }
@@ -532,12 +516,7 @@ pub fn iter_comits_and_parents(
 pub fn create_branch(name: &str, start_oid: &str, config: &Config) -> Result<()> {
     let ref_path = format!("refs/heads/{name}");
     // branches and tags are direct references
-    update_ref(
-        &ref_path,
-        &RefTarget::Direct(start_oid.to_string()),
-        &Follow::Never,
-        config,
-    )
+    update_ref(&ref_path, &RefTarget::Direct(start_oid.to_string()), config)
 }
 
 #[cfg(test)]
@@ -674,9 +653,7 @@ mod tests {
         current_entries.sort();
 
         assert_eq!(
-            get_ref("HEAD", &Follow::IfSymbolic, &config)?
-                .unwrap()
-                .to_string(),
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
             first_oid
         );
         assert_eq!(
@@ -690,9 +667,7 @@ mod tests {
         current_entries.sort();
 
         assert_eq!(
-            get_ref("HEAD", &Follow::IfSymbolic, &config)?
-                .unwrap()
-                .to_string(),
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
             second_oid
         );
         assert_eq!(
@@ -709,7 +684,8 @@ mod tests {
 
         // first commit
         create_test_file_structure(temp_dir.path())?;
-        let first_oid = create_commit("first message".to_string(), &config)?;
+        let first_oid = create_commit("first message".to_string(), &config)
+            .context("error creating first commit")?;
         create_tag("first commit", &first_oid, &config)?;
         let mut state_one = get_repository_contents(&config)?;
         state_one.sort();
@@ -784,8 +760,6 @@ mod tests {
     #[test]
     fn test_branches() -> Result<()> {
         let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
-
-        // 1. Create initial file structure and a real commit
         create_test_file_structure(temp_dir.path())?;
 
         let _commit_oid = create_commit("Initial commit".to_string(), &config)?;
