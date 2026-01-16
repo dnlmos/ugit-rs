@@ -425,56 +425,44 @@ pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
     )
 }
 
-// Return formatted output of git history
+// Return DOT format graph of git history
 pub fn k(config: &Config) -> Result<String> {
-    let mut output = String::new();
-    let mut refs_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut dot = String::from("digraph commits {\n");
     let mut oids = BTreeSet::new();
 
+    // Iterate refs without dereferencing (Follow::Never equivalent to deref=False)
     for entry in iter_refs(Follow::IfSymbolic, config).iter() {
-        for x in entry.iter() {
-            refs_map
-                .entry(x.1.to_string())
-                .or_default()
-                .push(x.0.clone());
-            oids.insert(x.1.to_string());
+        for (refname, ref_value) in entry.iter() {
+            dot.push_str(&format!("\"{}\" [shape=note]\n", refname));
+            dot.push_str(&format!("\"{}\" -> \"{}\"\n", refname, ref_value));
+
+            // Check if ref is not symbolic (direct OID reference)
+            // If Follow::Never is used, all refs should be dereferenced to OIDs
+            // You may need to check if ref_value looks like an OID vs a ref path
+            if !ref_value.starts_with("refs/") && !ref_value.starts_with("HEAD") {
+                oids.insert(ref_value.to_string());
+            }
         }
     }
 
+    // Iterate through all commits
     let commits = iter_comits_and_parents(oids, config)?;
-
-    output.push('\n');
-
-    for (i, oid) in commits.iter().enumerate() {
+    for oid in commits.iter() {
         let commit = get_commit(oid, config)?;
         let short_oid = &oid[..10.min(oid.len())];
 
-        let is_last = i == commits.len() - 1;
-        let prefix = if is_last { "└─" } else { "├─" };
-        let continuation = if is_last { "  " } else { "│ " };
+        dot.push_str(&format!(
+            "\"{}\" [shape=box style=filled label=\"{}\"]\n",
+            oid, short_oid
+        ));
 
-        // Show the commit
-        output.push_str(&format!("{} ● {}", prefix, short_oid.yellow()));
-
-        // Show refs
-        if let Some(refs) = refs_map.get(oid) {
-            output.push_str(&format!(
-                " ← {} | {}",
-                refs.join(", "),
-                commit.message.red()
-            ));
-        }
-
-        output.push('\n');
-
-        // Add spacing for next commit
-        if !is_last {
-            output.push_str(&format!("{}   \n", continuation));
+        if let Some(parent) = &commit.parent {
+            dot.push_str(&format!("\"{}\" -> \"{}\"\n", oid, parent));
         }
     }
 
-    output.push('\n');
-    Ok(output)
+    dot.push('}');
+    Ok(dot)
 }
 
 /// Resolve a "name" to an OID. A name can either be a ref (in which case this
