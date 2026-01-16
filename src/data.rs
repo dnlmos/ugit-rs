@@ -88,11 +88,7 @@ pub fn get_ref(name: &str, follow: &Follow, config: &Config) -> Result<String> {
 
     match ref_target {
         Some(RefTarget::Direct(oid)) => Ok(oid),
-        Some(RefTarget::Symbolic(path)) => Err(anyhow!(
-            "Reference '{}' is symbolic to '{}' and was not dereferenced",
-            name,
-            path
-        )),
+        Some(RefTarget::Symbolic(path)) => Ok(path),
         None => Err(anyhow!(
             "Reference '{}' exists, but doesnt have OID yet",
             name
@@ -141,11 +137,17 @@ fn get_ref_internal(
     Ok((ref_name.to_string(), Some(RefTarget::Direct(contents))))
 }
 
-pub fn update_ref(name: &str, ref_value: &RefTarget, config: &Config) -> Result<()> {
+pub fn update_ref(
+    name: &str,
+    ref_value: &RefTarget,
+    follow: &Follow,
+    config: &Config,
+) -> Result<()> {
+    let deref = matches!(follow, Follow::IfSymbolic);
     // find the actual file we need to write to.
     // get_ref_internal(..., deref: true) will follow symbolic links
     // until it finds a direct ref or a path that doesn't exist yet.
-    let (target_path, _) = get_ref_internal(name, true, config)
+    let (target_path, _) = get_ref_internal(name, deref, config)
         .with_context(|| format!("Failed to resolve reference path for '{}'", name))?;
 
     let full_path = config.git_dir.join(&target_path);
