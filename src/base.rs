@@ -1,11 +1,13 @@
-use crate::data::{ObjectType, get_object, get_ref, hash_object, iter_refs, update_ref};
+use crate::data::{
+    Follow, ObjectType, RefTarget, get_object, get_ref, hash_object, iter_refs, update_ref,
+};
+use crate::utils::is_valid_sha1;
 use anyhow::anyhow;
 use colored::*;
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet, VecDeque};
 use std::fmt::{self, Write as _};
 use std::fs::{self};
 use std::path::{Path, PathBuf};
-use ugit_rs::utils::is_valid_sha1;
 
 use anyhow::{Context, Error, Result};
 use walkdir::WalkDir;
@@ -28,6 +30,24 @@ impl fmt::Display for Commit {
         write!(f, "{}", self.message)
     }
 }
+
+pub fn init_repository(config: &Config) -> Result<(), Error> {
+    if fs::exists(config.git_dir.join("objects"))? {
+        println!("Repository already initialized");
+    } else {
+        println!("Initializing repository {}...", &config.git_dir.display());
+        fs::create_dir_all(config.git_dir.join("objects"))?;
+    };
+
+    // create master branch
+    update_ref(
+        "HEAD",
+        &RefTarget::Symbolic("refs/heads/master".to_string()),
+        &Follow::IfSymbolic,
+        config,
+    )
+}
+
 /// Reads and returns a set of ignored file paths from `.ugitignore`.
 ///
 /// Loads patterns from `.ugitignore`, trims and normalizes them, and resolves each
@@ -215,7 +235,6 @@ fn empty_working_dir(config: &Config) {
         })
     {
         let path = entry.path();
-        // println!("[deleting] {:?}", path);
 
         // since it may contain ignored file, ignore errors
         if path.is_file() {
@@ -271,22 +290,23 @@ pub fn read_tree(oid: &str, config: &Config) -> Result<()> {
 /// # Returns
 /// oid of the commit object
 pub fn create_commit(message: String, config: &Config) -> Result<String> {
-    let mut commit = String::new();
+    let tree_hash = write_tree(&config.base_dir, config)?;
+    let mut commit = format!("tree {}\n", tree_hash);
 
-    let tree_hash = write_tree(&config.base_dir, config)
-        .context("Could not generate tree hash during commit")?;
-
-    writeln!(&mut commit, "tree {}", tree_hash).context("Failed to format commit object")?;
-
-    let head = get_ref("@", config).context("Failed reading HEAD");
-    if let Ok(head_oid) = head {
-        writeln!(&mut commit, "parent {}", head_oid).context("Failed to format commit object")?;
+    if let Ok(oid) = get_ref("HEAD", &Follow::IfSymbolic, config) {
+        writeln!(&mut commit, "parent {}", oid)?;
     }
-    write!(&mut commit, "\n{}\n", message).context("Failed to format commit object")?;
 
-    let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)
-        .context("Failed to save commit to object database")?;
-    update_ref(Path::new("refs/heads/@"), &commit_oid, config).context("Failed to set HEAD")?;
+    commit.push_str(&format!("\n{}\n", message));
+    let commit_oid = hash_object(commit.as_bytes(), ObjectType::Commit, config)?;
+
+    update_ref(
+        "HEAD",
+        &RefTarget::Direct(commit_oid.clone()),
+        &Follow::IfSymbolic,
+        config,
+    )?;
+
     Ok(commit_oid)
 }
 
@@ -358,33 +378,51 @@ pub fn log(oid: &str, config: &Config) -> Result<String> {
             writeln!(history, "     | {}", line)?;
         }
         writeln!(history, "     |")?;
-
         writeln!(history)?;
         current_oid = commit.parent;
     }
     Ok(history)
 }
 
-pub fn resolve_oid(oid: &str, config: &Config) -> Result<String> {
-    if is_valid_sha1(oid) {
-        Ok(String::from(oid))
-    } else {
-        Ok(get_ref(oid, config)?)
+pub fn resolve_oid(name: &str, config: &Config) -> Result<String> {
+    if is_valid_sha1(name) {
+        return Ok(name.to_string());
+    }
+    get_ref(name, &Follow::IfSymbolic, config)
+}
+
+pub fn checkout(name: &str, config: &Config) -> Result<()> {
+    let oid = get_oid(name, config);
+    let commit = get_commit(&oid, config)
+        .with_context(|| format!("Error reading commit '{}' with oid '{}'", name, oid))?;
+    read_tree(&commit.tree, config)
+        .with_context(|| format!("Error reading tree '{}'", commit.tree))?;
+
+    let head = match is_branch(name, config) {
+        true => RefTarget::Symbolic(format!("refs/heads/{name}")),
+        false => RefTarget::Direct(oid),
+    };
+
+    match head {
+        // Update HEAD to point to branch name
+        RefTarget::Symbolic(_) => update_ref("HEAD", &head, &Follow::Never, config),
+        // Update HEAD to point directly to the commit
+        RefTarget::Direct(_) => update_ref("HEAD", &head, &Follow::IfSymbolic, config),
     }
 }
 
-pub fn checkout(oid: &str, config: &Config) -> Result<()> {
-    let commit =
-        get_commit(oid, config).with_context(|| format!("Error reading commit {}", oid))?;
-    read_tree(&commit.tree, config)
-        .with_context(|| format!("Error reading tree {}", commit.tree))?;
-
-    update_ref(Path::new("refs/heads/@"), oid, config)
+fn is_branch(name: &str, config: &Config) -> bool {
+    let path = format!("refs/heads/{name}");
+    get_ref(&path, &Follow::Never, config).is_ok()
 }
 
 pub fn create_tag(name: &str, oid: &str, config: &Config) -> Result<()> {
-    update_ref(Path::new(&format!("refs/tags/{name}")), oid, config)?;
-    Ok(())
+    update_ref(
+        &format!("refs/tags/{}", name),
+        &RefTarget::Direct(oid.to_string()),
+        &Follow::IfSymbolic,
+        config,
+    )
 }
 
 // Return formatted output of git history
@@ -393,10 +431,13 @@ pub fn k(config: &Config) -> Result<String> {
     let mut refs_map: BTreeMap<String, Vec<String>> = BTreeMap::new();
     let mut oids = BTreeSet::new();
 
-    for entry in iter_refs(config).iter() {
+    for entry in iter_refs(Follow::IfSymbolic, config).iter() {
         for x in entry.iter() {
-            refs_map.entry(x.1.clone()).or_default().push(x.0.clone());
-            oids.insert(x.1.clone());
+            refs_map
+                .entry(x.1.to_string())
+                .or_default()
+                .push(x.0.clone());
+            oids.insert(x.1.to_string());
         }
     }
 
@@ -440,10 +481,20 @@ pub fn k(config: &Config) -> Result<String> {
 /// function will return the OID that the ref points to) or an OID
 /// (in which case get_oid will just return that same OID).
 pub fn get_oid(name: &str, config: &Config) -> String {
-    match get_ref(name, config) {
-        Ok(id) => id,
-        _ => name.to_string(),
+    let refs_to_try = [
+        name,
+        &format!("refs/{}", name),
+        &format!("refs/tags/{}", name),
+        &format!("refs/heads/{}", name),
+    ];
+
+    for path in refs_to_try {
+        if let Ok(oid) = get_ref(path, &Follow::IfSymbolic, config) {
+            return oid;
+        }
     }
+
+    name.to_string()
 }
 
 pub fn iter_comits_and_parents(
@@ -455,7 +506,6 @@ pub fn iter_comits_and_parents(
 
     while !oids.is_empty() {
         let oid_ = oids.pop_front();
-        // println!("{oids:?}");
         if let Some(oid) = oid_ {
             // oids.push(oid.clone()); // ???
             if !visited.contains(&oid) {
@@ -471,10 +521,22 @@ pub fn iter_comits_and_parents(
     Ok(visited)
 }
 
+pub fn create_branch(name: &str, start_oid: &str, config: &Config) -> Result<()> {
+    let ref_path = format!("refs/heads/{name}");
+    // branches and tags are direct references
+    update_ref(
+        &ref_path,
+        &RefTarget::Direct(start_oid.to_string()),
+        &Follow::IfSymbolic,
+        config,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cli::{Config, init_repository};
+    use crate::base::init_repository;
+    use crate::cli::Config;
     use anyhow::Ok;
     use tempfile::{TempDir, tempdir};
 
@@ -484,10 +546,6 @@ mod tests {
             base_dir: temp_dir.path().to_path_buf(),
             git_dir: temp_dir.path().join(".ugit"),
         };
-
-        // println!("BASE_DIR> {:?}", config.base_dir);
-        // println!("GIT_DIR> {:?}", config.git_dir);
-
         init_repository(&config)?;
         Ok((temp_dir, config))
     }
@@ -537,7 +595,6 @@ mod tests {
 
         let tree_oid = write_tree(temp_dir.path(), &config)?;
 
-        println!("Tree OID: {}", tree_oid);
         assert!(!tree_oid.is_empty());
 
         // Verify the tree object was created
@@ -608,7 +665,10 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?, first_oid);
+        assert_eq!(
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
+            first_oid
+        );
         assert_eq!(
             current_entries, state_one,
             "FS should match first commit state"
@@ -619,7 +679,10 @@ mod tests {
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        assert_eq!(get_ref("@", &config)?, second_oid);
+        assert_eq!(
+            get_ref("HEAD", &Follow::IfSymbolic, &config)?.to_string(),
+            second_oid
+        );
         assert_eq!(
             current_entries, state_two,
             "FS should match Second Commit state"
@@ -634,7 +697,8 @@ mod tests {
 
         // first commit
         create_test_file_structure(temp_dir.path())?;
-        let first_oid = create_commit("first message".to_string(), &config)?;
+        let first_oid = create_commit("first message".to_string(), &config)
+            .context("error creating first commit")?;
         create_tag("first commit", &first_oid, &config)?;
         let mut state_one = get_repository_contents(&config)?;
         state_one.sort();
@@ -651,7 +715,7 @@ mod tests {
         );
         // check if head has the correct oid as "second commit"
         assert_eq!(
-            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
+            fs::read_to_string(config.git_dir.join("refs/heads/master"))?,
             second_oid
         );
 
@@ -659,20 +723,21 @@ mod tests {
         state_two.sort();
 
         // checkout first commit and compare file system
-        checkout(&get_oid("first commit", &config), &config)?;
+        checkout("first commit", &config)?;
         let mut current_entries = get_repository_contents(&config)?;
         current_entries.sort();
 
-        // check if head has the correct oid as "second commit"
+        // check if head has the correct oid as "first commit"
         assert_eq!(
             fs::read_to_string(config.git_dir.join("refs/tags/first commit"))?,
             first_oid
         );
-        // check if tag is created and contains correct oid
-        assert_eq!(
-            fs::read_to_string(config.git_dir.join("refs/heads/@"))?,
-            first_oid
-        );
+
+        // // check if tag is created and contains correct oid
+        // assert_eq!(
+        //     fs::read_to_string(config.git_dir.join("refs/heads/master"))?,
+        //     first_oid
+        // );
 
         assert_eq!(
             current_entries, state_one,
@@ -693,7 +758,46 @@ mod tests {
         std::fs::write(temp_dir.path().join("extra.txt"), "new content")?;
         let second_oid = create_commit("second message".to_string(), &config)?;
         create_tag("second commit", &second_oid, &config)?;
+        // add extra file and create third commit
+        std::fs::write(
+            temp_dir.path().join("extra_third.txt"),
+            "new content for third commit",
+        )?;
+        let _third_oid = create_commit("third message".to_string(), &config)?;
+        create_tag("third commit", &second_oid, &config)?;
+
         println!("{}", k(&config)?);
+
+        Ok(())
+    }
+    #[test]
+    fn test_branches() -> Result<()> {
+        let (temp_dir, config) = create_test_repo().expect("failed to create test repository");
+        create_test_file_structure(temp_dir.path())?;
+
+        // initial commit on master branch
+        let first_oid = create_commit("Initial commit".to_string(), &config)?;
+        create_branch("feature", &first_oid, &config)?;
+
+        checkout("feature", &config)?;
+
+        // second commit on feature branch
+        std::fs::write(temp_dir.path().join("feature_logic.txt"), "feature data")?;
+        let second_oid = create_commit("Feature commit".to_string(), &config)?;
+
+        let master_oid = get_ref("refs/heads/master", &Follow::Never, &config)?;
+        let feature_oid = get_ref("refs/heads/feature", &Follow::Never, &config)?;
+        let head_resolved = get_ref("HEAD", &Follow::IfSymbolic, &config)?;
+
+        assert_eq!(master_oid, first_oid, "Master should not have moved");
+        assert_eq!(
+            feature_oid, second_oid,
+            "Feature branch should have updated"
+        );
+        assert_eq!(
+            head_resolved, second_oid,
+            "HEAD should resolve to second commit"
+        );
 
         Ok(())
     }

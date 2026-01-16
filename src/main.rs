@@ -1,14 +1,16 @@
 mod base;
 mod cli;
 mod data;
+mod utils;
 
+use crate::base::init_repository;
 use clap::Parser;
-use cli::{Args, Commands, init_repository};
+use cli::{Args, Commands};
 
 use crate::{
-    base::{checkout, create_tag, get_oid, k, log},
+    base::{checkout, create_branch, create_tag, get_oid, k, log},
     cli::Config,
-    data::get_ref,
+    data::{Follow, get_ref},
 };
 
 fn main() {
@@ -55,16 +57,16 @@ fn main() {
         Commands::Log { oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("@", &config) {
-                    Ok(oid) => oid,
+                None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
+                    Ok(oid) => oid.to_string(),
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        eprintln!("Failed to resolve a ref 'HEAD': {e}");
                         return;
                     }
                 },
             };
-            let oid = get_oid(&target_oid, &config);
-            match log(&oid, &config) {
+            get_oid(&target_oid, &config);
+            match log(&target_oid, &config) {
                 Ok(history) => println!("{history}"),
                 Err(e) => eprintln!("Error occured when attempting to running log: {}", e),
             };
@@ -79,10 +81,10 @@ fn main() {
         Commands::Tag { name, oid } => {
             let target_oid = match oid {
                 Some(id) => id,
-                None => match get_ref("@", &config) {
-                    Ok(oid) => oid,
+                None => match get_ref("HEAD", &Follow::IfSymbolic, &config) {
+                    Ok(ref_) => ref_.to_string(),
                     Err(e) => {
-                        eprintln!("No OID provided and failed to fetch HEAD (@): {e}");
+                        eprintln!("Failed to resolve a ref 'HEAD': {e}");
                         return;
                     }
                 },
@@ -98,6 +100,19 @@ fn main() {
         }
         Commands::K => {
             let _ = k(&config);
+        }
+        Commands::Branch { name, start_point } => {
+            let start = start_point.unwrap_or_else(|| "@".to_string());
+            match create_branch(&name, &start, &config) {
+                Ok(_) => println!(
+                    "Branch '{}' with starting point {} created successfully",
+                    name, start
+                ),
+                Err(e) => eprintln!(
+                    "Error occured when attempting to create branch {} at starting point {}: {}",
+                    name, start, e
+                ),
+            }
         }
     }
 }
